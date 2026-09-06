@@ -3,10 +3,7 @@
 Blackjack for two, played to twelve, with a deck small enough to count.
 Three static files, no build step, no dependencies, no backend.
 
-**[Play it](https://YOUR-USERNAME.github.io/card-12/)** ← replace once deployed
-
-A sibling of [Card RPS](https://github.com/YOUR-USERNAME/card-rps) — same shell, same
-difficulty dial, completely different decision.
+**[Play it](https://danielbengu.github.io/gamify_blackjack/)** ← replace once deployed
 
 ---
 

@@ -4,7 +4,9 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Card 12</title>
-<link rel="stylesheet" href="style.css">
+<!-- ?v= is a cache buster: bump it whenever style.css or game.js changes,
+     so browsers can't serve a stale pair of files against fresh markup. -->
+<link rel="stylesheet" href="style.css?v=3">
 </head>
 <body>
 <div class="app">
@@ -46,9 +48,17 @@
     </section>
 
     <div class="middle">
+      <div class="score" id="pScore">
+        <span class="score-num" id="pScoreNum">–</span>
+        <span class="score-cap">You</span>
+      </div>
       <div class="middle-text">
         <div class="status" id="status">Dealing…</div>
         <div class="odds" id="oddsLine"></div>
+      </div>
+      <div class="score" id="aiScore">
+        <span class="score-num" id="aiScoreNum">–</span>
+        <span class="score-cap">Opponent</span>
       </div>
       <div class="actions">
         <button id="hitBtn" class="primary" disabled>Hit</button>
@@ -97,6 +107,6 @@
 
 </div>
 
-<script src="game.js" defer></script>
+<script src="game.js?v=3" defer></script>
 </body>
 </html>

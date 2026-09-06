@@ -165,6 +165,31 @@ button.primary:hover:not(:disabled){background:#93aeff;}
   min-height:104px;
 }
 .middle-text{flex:1;display:flex;flex-direction:column;align-items:center;gap:6px;text-align:center;}
+
+/* live scoreboard: whoever is ahead right now goes green, the other red */
+.score{
+  display:flex;flex-direction:column;align-items:center;gap:3px;
+  min-width:62px;flex:0 0 auto;
+}
+.score-num{
+  display:block;
+  font-size:38px;font-weight:700;line-height:1;
+  font-variant-numeric:tabular-nums;
+  color:var(--dim);
+  transform-origin:50% 55%;
+  transition:color .3s ease, text-shadow .3s ease;
+  will-change:transform;
+}
+.score-cap{
+  font-size:10px;letter-spacing:1.2px;text-transform:uppercase;
+  color:var(--dim);transition:color .3s ease;
+}
+.score.win  .score-num{color:var(--win); text-shadow:0 0 20px rgba(74,222,128,.35);}
+.score.lose .score-num{color:var(--lose);text-shadow:0 0 20px rgba(248,113,113,.28);}
+.score.tie  .score-num{color:var(--tie);}
+.score.bust .score-num{color:var(--lose);opacity:.7;}
+.score.win  .score-cap{color:var(--win);}
+.score.lose .score-cap,.score.bust .score-cap{color:var(--lose);}
 .status{font-size:14px;min-height:20px;}
 .status .hl{font-weight:650;}
 .status .note{color:var(--dim);font-size:12px;}
@@ -291,9 +316,12 @@ kbd{background:var(--panel);border:1px solid var(--line);border-radius:4px;paddi
 @media (max-width:620px){
   :root{--card-w:64px;--card-h:90px;}
   .card .value{font-size:30px;}
-  .middle{flex-direction:column;align-items:stretch;gap:12px;}
-  .actions{flex-direction:row;}
+  .middle{flex-wrap:wrap;gap:12px;}
+  .middle-text{flex:1 1 100%;order:3;}
+  .score{flex:1 1 0;}
+  .actions{flex:1 1 100%;order:4;flex-direction:row;}
   .actions button{flex:1;}
+  .score-num{font-size:30px;}
   .side-label{flex-wrap:wrap;gap:8px;}
   .card.small{width:34px;height:46px;}
   .card.small .value{font-size:15px;}

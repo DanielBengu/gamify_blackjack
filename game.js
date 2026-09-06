@@ -1,6 +1,32 @@
 "use strict";
 
 /* ============================================================================
+   0. FAILING LOUDLY
+
+   index.html ships with a static "Dealing…" placeholder, so if this script
+   dies before its first render the page just sits there looking patient. The
+   usual cause is a stale cached copy of one file against a fresh copy of
+   another, which shows up as a missing element. Say so, in the UI.
+   ============================================================================ */
+
+function fatal(err) {
+  const box = document.getElementById("status");
+  if (box) {
+    box.className = "status lose";
+    box.innerHTML =
+      '<span class="hl">The game failed to start.</span> ' +
+      String((err && err.message) || err) +
+      ' — if you just updated the files, force-reload with ' +
+      '<kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>R</kbd>.';
+  }
+  if (typeof console !== "undefined") console.error(err);
+}
+
+if (typeof window !== "undefined" && typeof window.addEventListener === "function") {
+  window.addEventListener("error", e => fatal(e.error || e.message));
+}
+
+/* ============================================================================
    1. MODEL
    ============================================================================ */
 
@@ -190,13 +216,20 @@ const AI = (() => {
    3. VIEW
    ============================================================================ */
 
-const $ = id => document.getElementById(id);
+/** Look up an element, and complain precisely if the markup doesn't have it. */
+const $ = id => {
+  const node = document.getElementById(id);
+  if (!node) throw new Error(`index.html has no #${id} — page and script are out of sync`);
+  return node;
+};
 const el = {
   pHand: $("pHand"), aiHand: $("aiHand"),
   pTotal: $("pTotal"), aiTotal: $("aiTotal"),
   pHp: $("pHp"), aiHp: $("aiHp"),
   pDeckBtn: $("pDeckBtn"), aiDeckBtn: $("aiDeckBtn"),
   pDeckCount: $("pDeckCount"), aiDeckCount: $("aiDeckCount"),
+  pScore: $("pScore"), aiScore: $("aiScore"),
+  pScoreNum: $("pScoreNum"), aiScoreNum: $("aiScoreNum"),
   status: $("status"), odds: $("oddsLine"),
   deckPanel: $("deckPanel"), deckClose: $("deckClose"),
   hitBtn: $("hitBtn"), standBtn: $("standBtn")
@@ -248,6 +281,16 @@ function flyCard(value, from, to, destNode, done) {
   };
   anim.onfinish = finish;
   setTimeout(finish, 750);
+}
+
+/** Swell and settle. Used whenever a score changes, harder when a round lands. */
+function pop(node, strength = 1.4, duration = 400) {
+  if (!node || typeof node.animate !== "function") return;
+  node.animate([
+    { transform: "scale(1)" },
+    { transform: `scale(${strength})`, offset: 0.32 },
+    { transform: "scale(1)" }
+  ], { duration, easing: "cubic-bezier(.34,1.56,.64,1)" });
 }
 
 function renderHp(node, hp) {
@@ -321,6 +364,12 @@ function startRound() {
   G.phase = "playing";
   G.busy = true;
   AI.reset(G.p.hp, G.a.hp);
+
+  // clear the scoreboard quietly, so the first card of the round is what pops
+  lastScore.p = "–"; lastScore.a = "–";
+  el.pScoreNum.textContent = "–";
+  el.aiScoreNum.textContent = "–";
+
   render();
 
   dealTo("a", () => dealTo("p", () => {
@@ -441,6 +490,14 @@ function resolveRound() {
   setStatus(msg, cls);
   render();
 
+  // the round landing gets a bigger swell than an ordinary draw; a crit bigger still
+  if (r.winner) {
+    pop(r.winner === "p" ? el.pScoreNum : el.aiScoreNum, r.dmg === 2 ? 2 : 1.7, 560);
+  } else {
+    pop(el.pScoreNum, 1.25, 460);
+    pop(el.aiScoreNum, 1.25, 460);
+  }
+
   setTimeout(() => {
     if (G.p.hp === 0 || G.a.hp === 0) return endMatch();
     G.busy = false;
@@ -479,12 +536,46 @@ function render() {
   el.pDeckCount.textContent  = G.p.deck.length;
   el.aiDeckCount.textContent = G.a.deck.length;
 
+  renderScores();
+
   const myMove = G.phase === "playing" && !G.busy && G.turn === 0 && G.p.done === DONE_ACTIVE;
   el.hitBtn.disabled = !myMove;
   el.standBtn.disabled = !myMove;
 
   if (G.deckOpen) renderDeckPanel();
   renderOdds();
+}
+
+/**
+ * The middle scoreboard. Colour reflects who would take the round if it ended
+ * right now, so the numbers swap green and red as the totals climb past each
+ * other. Only a genuine change triggers the pop — render() runs far too often.
+ */
+const lastScore = { p: null, a: null };
+
+function renderScores() {
+  const pT = total("p"), aT = total("a");
+  const r = roundResult(pT, G.p.done, aT, G.a.done);
+
+  const stateOf = side => {
+    if (!G[side].hand.length) return "";
+    if (G[side].done === DONE_BUST) return "bust";
+    if (!r.winner) return "tie";
+    return r.winner === side ? "win" : "lose";
+  };
+
+  paintScore("p", el.pScore,  el.pScoreNum,  pT, stateOf("p"));
+  paintScore("a", el.aiScore, el.aiScoreNum, aT, stateOf("a"));
+}
+
+function paintScore(key, box, num, value, state) {
+  box.className = "score" + (state ? " " + state : "");
+  // a player who hasn't been dealt anything yet shows a dash, not a losing zero
+  const shown = G[key].hand.length ? String(value) : "–";
+  if (lastScore[key] === shown) return;
+  lastScore[key] = shown;
+  num.textContent = shown;
+  pop(num);
 }
 
 function renderOdds() {
@@ -612,5 +703,9 @@ document.addEventListener("keydown", e => {
   if (k === "s") playerStand();
 });
 
-applyTemp();
-newMatch();
+try {
+  applyTemp();
+  newMatch();
+} catch (err) {
+  fatal(err);
+}
