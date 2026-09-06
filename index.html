@@ -35,19 +35,17 @@
     <section class="side opponent">
       <div class="side-label">
         <span>Opponent <span class="total" id="aiTotal">—</span></span>
+        <button id="aiDeckBtn" class="deck-chip" aria-expanded="false"
+                title="Show what's left in the opponent's deck">
+          <span class="deck-art"><i></i><i></i><i></i></span>
+          <b id="aiDeckCount">24</b>
+        </button>
         <span class="hp" id="aiHp"></span>
       </div>
       <div class="row" id="aiHand"></div>
     </section>
 
     <div class="middle">
-      <button id="deckBtn" class="deck" aria-expanded="false" title="Show what's left in the deck">
-        <span class="deck-art"><i></i><i></i><i></i></span>
-        <span class="deck-meta">
-          <b id="deckCount">24</b>
-          <small>in deck</small>
-        </span>
-      </button>
       <div class="middle-text">
         <div class="status" id="status">Dealing…</div>
         <div class="odds" id="oddsLine"></div>
@@ -61,6 +59,11 @@
     <section class="side">
       <div class="side-label">
         <span>You <span class="total" id="pTotal">—</span></span>
+        <button id="pDeckBtn" class="deck-chip" aria-expanded="false"
+                title="Show what's left in your deck">
+          <span class="deck-art"><i></i><i></i><i></i></span>
+          <b id="pDeckCount">24</b>
+        </button>
         <span class="hp" id="pHp"></span>
       </div>
       <div class="row" id="pHand"></div>
@@ -70,16 +73,26 @@
 
   <div class="deck-panel" id="deckPanel">
     <div class="deck-panel-head">
-      <span>Still in the deck</span>
+      <span>What's still in the decks</span>
       <button id="deckClose">Close</button>
     </div>
-    <div class="deck-list" id="deckList"></div>
-    <div class="deck-summary" id="deckSummary"></div>
+
+    <div class="deck-section" id="pDeckSection">
+      <div class="deck-section-head">Your deck</div>
+      <div class="deck-list" id="pDeckList"></div>
+      <div class="deck-summary" id="pDeckSummary"></div>
+    </div>
+
+    <div class="deck-section" id="aiDeckSection">
+      <div class="deck-section-head">Opponent's deck</div>
+      <div class="deck-list" id="aiDeckList"></div>
+      <div class="deck-summary" id="aiDeckSummary"></div>
+    </div>
   </div>
 
   <footer>
-    Get closer to 12 than the opponent without going over &middot; land on 12 exactly to crit for double damage<br>
-    Keys: <kbd>H</kbd> hit &middot; <kbd>S</kbd> stand &middot; <kbd>D</kbd> deck &middot; <kbd>N</kbd> new match
+    You each draw from your own 24-card deck &middot; get closer to 12 than the opponent without going over &middot; land on 12 exactly to crit for double damage<br>
+    Keys: <kbd>H</kbd> hit &middot; <kbd>S</kbd> stand &middot; <kbd>D</kbd> your deck &middot; <kbd>O</kbd> their deck &middot; <kbd>N</kbd> new match
   </footer>
 
 </div>

@@ -12,8 +12,11 @@ difficulty dial, completely different decision.
 
 ## Rules
 
-**The deck.** 24 cards: values 1 through 6, four copies of each. If it runs dry mid-round it is
-rebuilt and reshuffled immediately, and play continues.
+**The decks.** You each have **your own** 24-card deck: values 1 through 6, four copies of each,
+shuffled separately. You only ever draw from yours, they only ever draw from theirs. When one runs
+dry it is rebuilt and reshuffled on the spot — independently of the other, which keeps running down.
+So the two decks drift apart, and late in a match you can be drawing from a nearly full deck while
+they are scraping the bottom of theirs.
 
 **The goal.** Get closer to **12** than your opponent without going over. Going over busts you.
 
@@ -27,9 +30,12 @@ Busting loses to any surviving total, however low. Equal totals, or both busting
 
 **The match.** You start on **5 HP**. First to zero loses.
 
-**The deck viewer.** Click the deck (or press <kbd>D</kbd>) to see exactly which cards are still
-in it, and what fraction of them keep you at or under 12. Since every card on the table is face
-up, this is complete information — the game is a counting exercise, not a guessing one.
+**The deck viewer.** Each player has a deck chip next to their name showing how many cards they
+have left. Click either one — or press <kbd>D</kbd> for yours, <kbd>O</kbd> for theirs — to open a
+panel showing **both** decks card by card, with the count of each value still in them and what
+fraction keeps that player at or under 12. Since every card on the table is face up and both deck
+contents are public, this is complete information: the game is a counting exercise, not a guessing
+one. Knowing that their deck is out of small cards is often worth more than knowing your own.
 
 ---
 
@@ -44,24 +50,30 @@ information about the board and the deck. That makes the game a solved one, so a
 opponent simply plays the best move available, every time.
 
 **How it's solved.** The round is a finite game of chance and choice, so it's solved by
-**expectimax** with memoisation. State is `(deck composition, your total, my total, who has
-stopped, whose move)` — all of it packed into a single integer key. Choice nodes take the max
-(you) or min (the opponent); a hit is a chance node weighted by the exact deck composition. An
-empty deck reshuffles inside the search too, so the model never diverges from the real game.
+**expectimax** with memoisation. State is `(my deck composition, their deck composition, your
+total, my total, who has stopped, whose move)` — all of it packed into a single integer key,
+peaking around 8.6e11 and so comfortably inside `Number.MAX_SAFE_INTEGER`. Choice nodes take the
+max (you) or min (the opponent); a hit is a chance node weighted by the exact composition of
+**the mover's own deck**. An empty deck reshuffles inside the search too, so the model never
+diverges from the real game.
+
+Carrying two deck compositions instead of one is what makes this the expensive part: the worst
+case — start of a round, both decks full — takes about 55 ms cold, and typical mid-round solves
+land near 15 ms. The memo is kept for the whole round, so every decision after the first is
+effectively free.
 
 The value is **expected damage swing**, clamped by each side's remaining HP — so the opponent
-knows not to waste a crit on someone sitting at 1 HP, and knows when it needs one. A full solve
-takes about 6 ms.
+knows not to waste a crit on someone sitting at 1 HP, and knows when it needs one.
 
 **Below `t = 1`** the opponent samples between hit and stand from a softmax over their true
 expected values, so its mistakes are the close calls first and the blunders last. There's a small
 floor on the sharpness: even at zero it plays badly rather than randomly.
 
-Measured against a scripted player who hits until reaching 9, over 900 matches per setting:
+Measured against a scripted player who hits until reaching 9, over 800 matches per setting:
 
 | Slider | 0 | 17 | 33 | 50 | 66 | 83 | 100 |
 |---|---|---|---|---|---|---|---|
-| Opponent wins | 11% | 20% | 46% | 62% | 67% | 66% | 66% |
+| Opponent wins | 9% | 22% | 46% | 65% | 64% | 61% | 67% |
 
 The top of the dial flattens because perfect play only beats that baseline about two thirds of
 the time — there isn't much room above competent play in this game. Most of the dial's range
@@ -107,10 +119,10 @@ game.js      all the logic
 
 | Section | What's in it |
 |---|---|
-| 1. Model | the deck, `roundResult` (the whole win/crit/push table) |
-| 2. AI | `ev` (memoised expectimax), `actionValues`, `decide` |
-| 3. View | `cardNode`, `flyCard` (the draw animation), the deck panel — zero assets |
-| 4. Controller | match and round flow, turn passing, resolution |
+| 1. Model | the decks, `roundResult` (the whole win/crit/push table) |
+| 2. AI | `ev` (memoised expectimax over both decks), `actionValues`, `decide` |
+| 3. View | `cardNode`, `flyCard` (the draw animation), the two-deck panel — zero assets |
+| 4. Controller | match and round flow, per-side draws and reshuffles, resolution |
 
 Sections 1–2 have no DOM dependency, so they can be pulled into Node and tested directly.
 
@@ -122,10 +134,15 @@ whatever composition you give it.
 
 ## Ideas if you want to extend it
 
+- **A shared deck.** Both players drawing from one deck makes every card you take a card they
+  can't have. It's a smaller state space and a meaner game — see the `card-rps` sibling's history
+  or just merge `G.p.deck` and `G.a.deck` back into one and drop a composition from the AI's key.
 - **Discard-pile reshuffle.** Right now an empty deck is rebuilt as a fresh full 24, which is
   simple but means a value can appear more than four times across one long round. Reshuffling
   only the discard pile instead would make the count exact end to end — change `drawCard` and the
   reshuffle branch in `ev` together, or the AI's model will drift from the real deck.
+- **Asymmetric decks.** Nothing in the solver assumes the two decks start the same. Give each
+  player a different composition — more high cards, fewer copies — and it still plays exactly.
 - **A hole card.** Deal each player one face-down card. That breaks perfect information and turns
   the solver into a belief problem — much closer to real blackjack.
 - **Doubling down.** Let a player declare, before hitting, that this round is worth double damage

@@ -5,13 +5,14 @@
    ============================================================================ */
 
 const TARGET   = 12;   // go over this and you bust
-const COPIES   = 4;    // copies of each value in the deck
+const COPIES   = 4;    // copies of each value in a deck
 const MAX_VAL  = 6;
 const START_HP = 5;
+const DECK_SIZE = COPIES * MAX_VAL;
 
 const DONE_ACTIVE = 0, DONE_STOOD = 1, DONE_BUST = 2;
 
-/** A fresh, shuffled 24-card deck. */
+/** A fresh, shuffled 24-card deck. Each player owns one. */
 function freshDeck() {
   const d = [];
   for (let v = 1; v <= MAX_VAL; v++)
@@ -46,10 +47,12 @@ function roundResult(pT, pD, aT, aD) {
 }
 
 /* ============================================================================
-   2. AI — exact expectimax over the deck composition
-   Value is expected damage swing from the PLAYER's point of view: damage the
-   player deals minus damage they take, each clamped by the target's remaining
-   HP so nobody wastes a crit on a one-hit-point opponent.
+   2. AI — exact expectimax over both deck compositions
+
+   Each player draws from their own deck, so the state carries two independent
+   compositions. Value is expected damage swing from the PLAYER's point of
+   view, each side's damage clamped by the target's remaining HP so nobody
+   wastes a crit on a one-hit-point opponent.
    ============================================================================ */
 
 const AI = (() => {
@@ -62,23 +65,30 @@ const AI = (() => {
     return r.winner === "p" ? Math.min(r.dmg, hp.a) : -Math.min(r.dmg, hp.p);
   }
 
-  /** Pack the whole state into one integer-safe key. */
-  function keyOf(counts, n, pT, aT, pD, aD, turn) {
-    let deck = 0;
-    for (let i = 0; i < MAX_VAL; i++) deck = deck * 5 + counts[i];   // 0..4 each
-    return ((((deck * 14 + pT) * 14 + aT) * 3 + pD) * 3 + aD) * 2 + turn;
+  /** Base-5 digits of one deck's counts: 0..15624. */
+  function deckKey(counts) {
+    let k = 0;
+    for (let i = 0; i < MAX_VAL; i++) k = k * 5 + counts[i];
+    return k;
+  }
+
+  /** Whole state as one integer-safe key (max ~8.6e11, well inside 2^53). */
+  function keyOf(pC, aC, pT, aT, pD, aD, turn) {
+    let k = deckKey(pC) * 15625 + deckKey(aC);
+    k = ((((k * 14 + pT) * 14 + aT) * 3 + pD) * 3 + aD) * 2 + turn;
+    return k;
   }
 
   /**
    * Expected value of the position. `turn` is 0 for the player, 1 for the AI.
    * Totals are 0..TARGET while alive; a busted hand is stored as TARGET + 1.
    */
-  function ev(counts, n, pT, aT, pD, aD, turn) {
+  function ev(pC, pN, aC, aN, pT, aT, pD, aD, turn) {
     if (pD !== DONE_ACTIVE && aD !== DONE_ACTIVE) return terminal(pT, pD, aT, aD);
     if (turn === 0 && pD !== DONE_ACTIVE) turn = 1;
     if (turn === 1 && aD !== DONE_ACTIVE) turn = 0;
 
-    const key = keyOf(counts, n, pT, aT, pD, aD, turn);
+    const key = keyOf(pC, aC, pT, aT, pD, aD, turn);
     const seen = memo.get(key);
     if (seen !== undefined) return seen;
 
@@ -86,28 +96,29 @@ const AI = (() => {
 
     // --- stand ---
     const stand = mine
-      ? ev(counts, n, pT, aT, DONE_STOOD, aD, 1)
-      : ev(counts, n, pT, aT, pD, DONE_STOOD, 0);
+      ? ev(pC, pN, aC, aN, pT, aT, DONE_STOOD, aD, 1)
+      : ev(pC, pN, aC, aN, pT, aT, pD, DONE_STOOD, 0);
 
-    // --- hit --- (an empty deck is reshuffled before the card is drawn)
-    let src = counts, srcN = n;
-    if (srcN === 0) { src = new Array(MAX_VAL).fill(COPIES); srcN = COPIES * MAX_VAL; }
+    // --- hit --- the mover draws from their OWN deck, reshuffling it if empty
+    let src  = mine ? pC : aC;
+    let srcN = mine ? pN : aN;
+    if (srcN === 0) { src = new Array(MAX_VAL).fill(COPIES); srcN = DECK_SIZE; }
+
     let hit = 0;
     for (let i = 0; i < MAX_VAL; i++) {
       if (!src[i]) continue;
-      const p = src[i] / srcN;
-      const v = i + 1;
+      const p = src[i] / srcN, v = i + 1;
       src[i]--;
       if (mine) {
         const t = pT + v;
         hit += p * (t > TARGET
-          ? ev(src, srcN - 1, TARGET + 1, aT, DONE_BUST, aD, 1)
-          : ev(src, srcN - 1, t, aT, DONE_ACTIVE, aD, 1));
+          ? ev(src, srcN - 1, aC, aN, TARGET + 1, aT, DONE_BUST, aD, 1)
+          : ev(src, srcN - 1, aC, aN, t, aT, DONE_ACTIVE, aD, 1));
       } else {
         const t = aT + v;
         hit += p * (t > TARGET
-          ? ev(src, srcN - 1, pT, TARGET + 1, pD, DONE_BUST, 0)
-          : ev(src, srcN - 1, pT, t, pD, DONE_ACTIVE, 0));
+          ? ev(pC, pN, src, srcN - 1, pT, TARGET + 1, pD, DONE_BUST, 0)
+          : ev(pC, pN, src, srcN - 1, pT, t, pD, DONE_ACTIVE, 0));
       }
       src[i]++;
     }
@@ -117,15 +128,18 @@ const AI = (() => {
     return out;
   }
 
-  /** Expected value of each action for whoever is to move. */
-  function actionValues(counts, n, pT, aT, pD, aD, turn) {
+  /** Expected value of each action for whoever is to move, plus their bust risk. */
+  function actionValues(pC, pN, aC, aN, pT, aT, pD, aD, turn) {
     const mine = turn === 0;
     const stand = mine
-      ? ev(counts, n, pT, aT, DONE_STOOD, aD, 1)
-      : ev(counts, n, pT, aT, pD, DONE_STOOD, 0);
+      ? ev(pC, pN, aC, aN, pT, aT, DONE_STOOD, aD, 1)
+      : ev(pC, pN, aC, aN, pT, aT, pD, DONE_STOOD, 0);
 
-    let src = counts, srcN = n;
-    if (srcN === 0) { src = new Array(MAX_VAL).fill(COPIES); srcN = COPIES * MAX_VAL; }
+    let src  = mine ? pC : aC;
+    let srcN = mine ? pN : aN;
+    let reshuffles = false;
+    if (srcN === 0) { src = new Array(MAX_VAL).fill(COPIES); srcN = DECK_SIZE; reshuffles = true; }
+
     let hit = 0, bust = 0;
     const total = mine ? pT : aT;
     for (let i = 0; i < MAX_VAL; i++) {
@@ -135,16 +149,16 @@ const AI = (() => {
       src[i]--;
       if (mine) {
         hit += p * (t > TARGET
-          ? ev(src, srcN - 1, TARGET + 1, aT, DONE_BUST, aD, 1)
-          : ev(src, srcN - 1, t, aT, DONE_ACTIVE, aD, 1));
+          ? ev(src, srcN - 1, aC, aN, TARGET + 1, aT, DONE_BUST, aD, 1)
+          : ev(src, srcN - 1, aC, aN, t, aT, DONE_ACTIVE, aD, 1));
       } else {
         hit += p * (t > TARGET
-          ? ev(src, srcN - 1, pT, TARGET + 1, pD, DONE_BUST, 0)
-          : ev(src, srcN - 1, pT, t, pD, DONE_ACTIVE, 0));
+          ? ev(pC, pN, src, srcN - 1, pT, TARGET + 1, pD, DONE_BUST, 0)
+          : ev(pC, pN, src, srcN - 1, pT, t, pD, DONE_ACTIVE, 0));
       }
       src[i]++;
     }
-    return { stand, hit, bust };
+    return { stand, hit, bust, reshuffles };
   }
 
   return {
@@ -159,8 +173,8 @@ const AI = (() => {
      * temp 1 always takes the better action. Below that it picks from a softmax
      * over the true expected values, so its mistakes are close calls first.
      */
-    decide(counts, n, pT, aT, pD, aD, temp) {
-      const { stand, hit } = actionValues(counts, n, pT, aT, pD, aD, 1);
+    decide(pC, pN, aC, aN, pT, aT, pD, aD, temp) {
+      const { stand, hit } = actionValues(pC, pN, aC, aN, pT, aT, pD, aD, 1);
       if (temp >= 1) return hit < stand ? "hit" : "stand";   // AI minimises
       // The 0.6 floor keeps the far-left of the dial from degenerating into a
       // coin flip — Easy should play badly, not randomly.
@@ -181,26 +195,21 @@ const el = {
   pHand: $("pHand"), aiHand: $("aiHand"),
   pTotal: $("pTotal"), aiTotal: $("aiTotal"),
   pHp: $("pHp"), aiHp: $("aiHp"),
+  pDeckBtn: $("pDeckBtn"), aiDeckBtn: $("aiDeckBtn"),
+  pDeckCount: $("pDeckCount"), aiDeckCount: $("aiDeckCount"),
   status: $("status"), odds: $("oddsLine"),
-  deckCount: $("deckCount"), deckPanel: $("deckPanel"), deckList: $("deckList"),
-  deckSummary: $("deckSummary"),
+  deckPanel: $("deckPanel"), deckClose: $("deckClose"),
   hitBtn: $("hitBtn"), standBtn: $("standBtn")
 };
 
 function cardNode(value, opts = {}) {
   const d = document.createElement("div");
-  d.className = "card v" + value + (opts.small ? " small" : "") + (opts.fresh ? " fresh" : "");
+  d.className = "card v" + value + (opts.small ? " small" : "");
   d.dataset.slot = opts.slot !== undefined ? opts.slot : "";
   d.innerHTML =
     `<span class="corner tl">${value}</span>` +
     `<span class="value">${value}</span>` +
     `<span class="corner br">${value}</span>`;
-  return d;
-}
-
-function deckNode() {
-  const d = document.createElement("div");
-  d.className = "card back";
   return d;
 }
 
@@ -259,9 +268,9 @@ function renderHand(node, hand, done) {
 
 function totalText(hand, done) {
   const t = hand.reduce((a, b) => a + b, 0);
-  if (done === DONE_BUST) return `${t} — bust`;
+  if (done === DONE_BUST)  return `${t} — bust`;
   if (done === DONE_STOOD) return `${t} — stood`;
-  if (t === TARGET) return `${t} — on target`;
+  if (t === TARGET)        return `${t} — on target`;
   return String(t);
 }
 
@@ -270,9 +279,8 @@ function totalText(hand, done) {
    ============================================================================ */
 
 const G = {
-  deck: [],
-  p: { hand: [], done: DONE_ACTIVE, hp: START_HP },
-  a: { hand: [], done: DONE_ACTIVE, hp: START_HP },
+  p: { hand: [], deck: [], done: DONE_ACTIVE, hp: START_HP, reshuffled: false },
+  a: { hand: [], deck: [], done: DONE_ACTIVE, hp: START_HP, reshuffled: false },
   turn: 0,                 // 0 = player, 1 = AI
   playerFirst: true,
   phase: "idle",           // idle | playing | roundover | matchover
@@ -281,22 +289,23 @@ const G = {
   busy: false,
   tally: { w: 0, d: 0, l: 0 },
   deckOpen: false,
-  reshuffled: false
+  deckFocus: "p"
 };
 
 const total = side => G[side].hand.reduce((a, b) => a + b, 0);
 
-/* ---- deck ---- */
-
-function drawCard() {
-  if (!G.deck.length) { G.deck = freshDeck(); G.reshuffled = true; }
-  return G.deck.pop();
+/** Draw from a side's OWN deck, reshuffling that deck alone if it has run out. */
+function drawCard(side) {
+  const s = G[side];
+  if (!s.deck.length) { s.deck = freshDeck(); s.reshuffled = true; }
+  return s.deck.pop();
 }
 
 /* ---- match / round ---- */
 
 function newMatch() {
-  G.deck = freshDeck();
+  G.p.deck = freshDeck();
+  G.a.deck = freshDeck();
   G.p.hp = START_HP;
   G.a.hp = START_HP;
   G.playerFirst = true;
@@ -305,17 +314,15 @@ function newMatch() {
 }
 
 function startRound() {
-  G.p.hand = []; G.p.done = DONE_ACTIVE;
-  G.a.hand = []; G.a.done = DONE_ACTIVE;
+  G.p.hand = []; G.p.done = DONE_ACTIVE; G.p.reshuffled = false;
+  G.a.hand = []; G.a.done = DONE_ACTIVE; G.a.reshuffled = false;
   G.turn = G.playerFirst ? 0 : 1;
   G.playerFirst = !G.playerFirst;
   G.phase = "playing";
   G.busy = true;
-  G.reshuffled = false;
   AI.reset(G.p.hp, G.a.hp);
   render();
 
-  // opening card each, dealt one after the other
   dealTo("a", () => dealTo("p", () => {
     G.busy = false;
     render();
@@ -324,10 +331,11 @@ function startRound() {
   }));
 }
 
-/** Draw one card into a hand, animated from the deck. */
+/** Draw one card into a hand, animated from that player's own deck. */
 function dealTo(side, after) {
-  const deckRect = $("deckBtn").getBoundingClientRect();
-  const v = drawCard();
+  const btn = side === "p" ? el.pDeckBtn : el.aiDeckBtn;
+  const from = btn.getBoundingClientRect();
+  const v = drawCard(side);
   G[side].hand.push(v);
   if (total(side) > TARGET) G[side].done = DONE_BUST;
   render();
@@ -337,26 +345,21 @@ function dealTo(side, after) {
   const node = container.querySelector('[data-slot="' + slot + '"]');
   const to = node ? node.getBoundingClientRect() : null;
 
-  flyCard(v, deckRect, to, node, () => {
-    render();
-    after && after();
-  });
+  flyCard(v, from, to, node, () => { render(); after && after(); });
 }
 
 /* ---- turns ---- */
 
-function passTurn() {
-  const other = G.turn === 0 ? 1 : 0;
-  const otherDone = other === 0 ? G.p.done : G.a.done;
-  if (otherDone === DONE_ACTIVE) G.turn = other;
-  // otherwise the current player keeps drawing alone
-}
-
 function afterAction() {
   if (G.p.done !== DONE_ACTIVE && G.a.done !== DONE_ACTIVE) { resolveRound(); return; }
   const mineDone = G.turn === 0 ? G.p.done : G.a.done;
-  if (mineDone !== DONE_ACTIVE) G.turn = G.turn === 0 ? 1 : 0;
-  else passTurn();
+  if (mineDone !== DONE_ACTIVE) {
+    G.turn = G.turn === 0 ? 1 : 0;          // I'm out; the other plays on alone
+  } else {
+    const other = G.turn === 0 ? 1 : 0;
+    const otherDone = other === 0 ? G.p.done : G.a.done;
+    if (otherDone === DONE_ACTIVE) G.turn = other;
+  }
   G.busy = false;
   render();
   if (G.turn === 1) scheduleAi();
@@ -366,7 +369,7 @@ function afterAction() {
 function playerHit() {
   if (G.phase !== "playing" || G.busy || G.turn !== 0 || G.p.done !== DONE_ACTIVE) return;
   G.busy = true;
-  setStatus("You hit.");
+  setStatus(G.p.deck.length ? "You hit." : "Your deck is empty — reshuffling.");
   dealTo("p", () => {
     if (G.p.done === DONE_BUST) setStatus(`You drew to ${total("p")} — <span class="hl">bust</span>.`, "lose");
     afterAction();
@@ -387,8 +390,11 @@ function scheduleAi() { setTimeout(aiMove, 620); }
 function aiMove() {
   if (G.phase !== "playing" || G.turn !== 1 || G.a.done !== DONE_ACTIVE) return;
   G.busy = true;
-  const move = AI.decide(countsOf(G.deck), G.deck.length,
-                         total("p"), total("a"), G.p.done, G.a.done, G.temp);
+  const move = AI.decide(
+    countsOf(G.p.deck), G.p.deck.length,
+    countsOf(G.a.deck), G.a.deck.length,
+    total("p"), total("a"), G.p.done, G.a.done, G.temp);
+
   if (move === "stand") {
     G.a.done = DONE_STOOD;
     setStatus(`Opponent stands on ${total("a")}.`);
@@ -413,25 +419,25 @@ function resolveRound() {
 
   let msg, cls;
   if (!r.winner) {
-    msg = G.p.done === DONE_BUST && G.a.done === DONE_BUST
+    msg = (G.p.done === DONE_BUST && G.a.done === DONE_BUST)
       ? "You both bust — no damage."
       : `Both on ${pT} — push, no damage.`;
     cls = "tie";
+  } else if (r.winner === "p") {
+    G.a.hp = Math.max(0, G.a.hp - r.dmg);
+    msg = `${pT} beats ${aT}${G.a.done === DONE_BUST ? " (bust)" : ""} — ` +
+          `<span class="hl">${r.dmg === 2 ? "CRIT! 2 damage" : "1 damage"}</span>`;
+    cls = "win";
   } else {
-    const crit = r.dmg === 2;
-    if (r.winner === "p") {
-      G.a.hp = Math.max(0, G.a.hp - r.dmg);
-      msg = `${pT} beats ${aT}${G.a.done === DONE_BUST ? " (bust)" : ""} — ` +
-            `<span class="hl">${crit ? "CRIT! 2 damage" : "1 damage"}</span>`;
-      cls = "win";
-    } else {
-      G.p.hp = Math.max(0, G.p.hp - r.dmg);
-      msg = `${aT} beats ${pT}${G.p.done === DONE_BUST ? " (bust)" : ""} — ` +
-            `<span class="hl">${crit ? "CRIT! 2 damage" : "1 damage"}</span>`;
-      cls = "lose";
-    }
+    G.p.hp = Math.max(0, G.p.hp - r.dmg);
+    msg = `${aT} beats ${pT}${G.p.done === DONE_BUST ? " (bust)" : ""} — ` +
+          `<span class="hl">${r.dmg === 2 ? "CRIT! 2 damage" : "1 damage"}</span>`;
+    cls = "lose";
   }
-  if (G.reshuffled) msg += " <span class='note'>· deck reshuffled</span>";
+
+  const shuffled = [G.p.reshuffled && "yours", G.a.reshuffled && "theirs"].filter(Boolean);
+  if (shuffled.length) msg += ` <span class='note'>· reshuffled: ${shuffled.join(" & ")}</span>`;
+
   setStatus(msg, cls);
   render();
 
@@ -446,7 +452,7 @@ function endMatch() {
   G.phase = "matchover";
   G.busy = false;
   let cls, text;
-  if (G.a.hp === 0 && G.p.hp === 0) { cls = "tie";  text = "Both down — draw"; G.tally.d++; }
+  if (G.a.hp === 0 && G.p.hp === 0) { cls = "tie";  text = "Both down — draw";  G.tally.d++; }
   else if (G.a.hp === 0)            { cls = "win";  text = "You win the match"; G.tally.w++; }
   else                              { cls = "lose"; text = "You lose the match"; G.tally.l++; }
   $("tw").textContent = G.tally.w;
@@ -461,19 +467,22 @@ function endMatch() {
 function render() {
   renderHand(el.pHand, G.p.hand, G.p.done);
   renderHand(el.aiHand, G.a.hand, G.a.done);
-  el.pTotal.textContent = G.p.hand.length ? totalText(G.p.hand, G.p.done) : "—";
+
+  el.pTotal.textContent  = G.p.hand.length ? totalText(G.p.hand, G.p.done) : "—";
   el.aiTotal.textContent = G.a.hand.length ? totalText(G.a.hand, G.a.done) : "—";
-  el.pTotal.className = "total" + (G.p.done === DONE_BUST ? " bust" : total("p") === TARGET ? " target" : "");
+  el.pTotal.className  = "total" + (G.p.done === DONE_BUST ? " bust" : total("p") === TARGET ? " target" : "");
   el.aiTotal.className = "total" + (G.a.done === DONE_BUST ? " bust" : total("a") === TARGET ? " target" : "");
 
   renderHp(el.pHp, G.p.hp);
   renderHp(el.aiHp, G.a.hp);
 
+  el.pDeckCount.textContent  = G.p.deck.length;
+  el.aiDeckCount.textContent = G.a.deck.length;
+
   const myMove = G.phase === "playing" && !G.busy && G.turn === 0 && G.p.done === DONE_ACTIVE;
   el.hitBtn.disabled = !myMove;
   el.standBtn.disabled = !myMove;
 
-  el.deckCount.textContent = G.deck.length;
   if (G.deckOpen) renderDeckPanel();
   renderOdds();
 }
@@ -485,7 +494,9 @@ function renderOdds() {
     return;
   }
   const { stand, hit, bust } = AI.actionValues(
-    countsOf(G.deck), G.deck.length, total("p"), total("a"), G.p.done, G.a.done, 0);
+    countsOf(G.p.deck), G.p.deck.length,
+    countsOf(G.a.deck), G.a.deck.length,
+    total("p"), total("a"), G.p.done, G.a.done, 0);
   const best = hit > stand ? "hit" : "stand";
   el.odds.innerHTML =
     `Hitting busts <b>${Math.round(bust * 100)}%</b> of the time · ` +
@@ -501,9 +512,10 @@ function setStatus(text, cls = "") {
 
 /* ---- deck viewer ---- */
 
-function renderDeckPanel() {
-  const counts = countsOf(G.deck);
-  el.deckList.innerHTML = "";
+/** Render one deck's six columns into `host`. */
+function renderDeckColumns(host, deck) {
+  const counts = countsOf(deck);
+  host.innerHTML = "";
   for (let v = 1; v <= MAX_VAL; v++) {
     const col = document.createElement("div");
     col.className = "deck-col" + (counts[v - 1] === 0 ? " gone" : "");
@@ -511,35 +523,52 @@ function renderDeckPanel() {
     stack.className = "deck-stack";
     for (let k = 0; k < counts[v - 1]; k++) stack.appendChild(cardNode(v, { small: true }));
     for (let k = counts[v - 1]; k < COPIES; k++) {
-      const ghost = document.createElement("div");
-      ghost.className = "card small ghost";
-      stack.appendChild(ghost);
+      const g = document.createElement("div");
+      g.className = "card small ghost";
+      stack.appendChild(g);
     }
     const cap = document.createElement("div");
     cap.className = "deck-cap";
     cap.innerHTML = `<b>${counts[v - 1]}</b> / ${COPIES}`;
     col.appendChild(stack);
     col.appendChild(cap);
-    el.deckList.appendChild(col);
+    host.appendChild(col);
   }
-
-  const n = G.deck.length;
-  let summary = `${n} card${n === 1 ? "" : "s"} left`;
-  if (G.phase === "playing" && G.p.done === DONE_ACTIVE) {
-    const need = TARGET - total("p");
-    const safe = counts.reduce((s, c, i) => s + (i + 1 <= need ? c : 0), 0);
-    summary += n
-      ? ` · ${safe} of them keep you at or under ${TARGET} (${Math.round(safe / n * 100)}%)`
-      : " · next hit reshuffles the deck";
-  }
-  el.deckSummary.textContent = summary;
 }
 
-function toggleDeck(force) {
-  G.deckOpen = force !== undefined ? force : !G.deckOpen;
-  el.deckPanel.classList.toggle("open", G.deckOpen);
-  $("deckBtn").setAttribute("aria-expanded", String(G.deckOpen));
-  if (G.deckOpen) renderDeckPanel();
+/** "N cards left · M of them keep you at or under 12". */
+function deckSummary(deck, side) {
+  const n = deck.length;
+  let s = `${n} card${n === 1 ? "" : "s"} left`;
+  const done = G[side].done;
+  if (G.phase === "playing" && done === DONE_ACTIVE) {
+    if (!n) return s + " · the next draw reshuffles this deck";
+    const need = TARGET - total(side);
+    const counts = countsOf(deck);
+    const safe = counts.reduce((acc, c, i) => acc + (i + 1 <= need ? c : 0), 0);
+    const who = side === "p" ? "keep you" : "keep them";
+    s += ` · ${safe} of them ${who} at or under ${TARGET} (${Math.round(safe / n * 100)}%)`;
+  }
+  return s;
+}
+
+function renderDeckPanel() {
+  renderDeckColumns($("pDeckList"), G.p.deck);
+  renderDeckColumns($("aiDeckList"), G.a.deck);
+  $("pDeckSummary").textContent  = deckSummary(G.p.deck, "p");
+  $("aiDeckSummary").textContent = deckSummary(G.a.deck, "a");
+  $("pDeckSection").classList.toggle("focus", G.deckFocus === "p");
+  $("aiDeckSection").classList.toggle("focus", G.deckFocus === "a");
+}
+
+function toggleDeck(side, force) {
+  const open = force !== undefined ? force : !(G.deckOpen && G.deckFocus === side);
+  G.deckOpen = open;
+  if (side) G.deckFocus = side;
+  el.deckPanel.classList.toggle("open", open);
+  el.pDeckBtn.setAttribute("aria-expanded", String(open && G.deckFocus === "p"));
+  el.aiDeckBtn.setAttribute("aria-expanded", String(open && G.deckFocus === "a"));
+  if (open) renderDeckPanel();
 }
 
 /* ---- controls ---- */
@@ -547,8 +576,9 @@ function toggleDeck(force) {
 el.hitBtn.addEventListener("click", playerHit);
 el.standBtn.addEventListener("click", playerStand);
 $("newBtn").addEventListener("click", newMatch);
-$("deckBtn").addEventListener("click", () => toggleDeck());
-$("deckClose").addEventListener("click", () => toggleDeck(false));
+el.pDeckBtn.addEventListener("click", () => toggleDeck("p"));
+el.aiDeckBtn.addEventListener("click", () => toggleDeck("a"));
+el.deckClose.addEventListener("click", () => toggleDeck(null, false));
 
 const ZONES = [
   { max: 33,  name: "Easy",    color: "var(--easy)" },
@@ -575,8 +605,9 @@ $("oddsBtn").addEventListener("click", e => {
 document.addEventListener("keydown", e => {
   const k = e.key.toLowerCase();
   if (k === "n") { newMatch(); return; }
-  if (k === "d") { toggleDeck(); return; }
-  if (k === "escape") { toggleDeck(false); return; }
+  if (k === "d") { toggleDeck("p"); return; }
+  if (k === "o") { toggleDeck("a"); return; }
+  if (k === "escape") { toggleDeck(null, false); return; }
   if (k === "h") playerHit();
   if (k === "s") playerStand();
 });

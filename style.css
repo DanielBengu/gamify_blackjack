@@ -176,12 +176,18 @@ button.primary:hover:not(:disabled){background:#93aeff;}
 .actions{display:flex;flex-direction:column;gap:8px;}
 .actions button{min-width:86px;}
 
-/* the deck: a small stack you can click */
-.deck{
-  display:flex;align-items:center;gap:11px;
-  padding:9px 13px 9px 10px;
+/* each player's own deck: a compact clickable chip in their label row */
+.deck-chip{
+  display:flex;align-items:center;gap:8px;
+  padding:4px 10px 4px 7px;
   background:var(--panel);
+  font-size:13px;font-variant-numeric:tabular-nums;
+  letter-spacing:0;text-transform:none;
 }
+.deck-chip b{font-size:14px;}
+.deck-chip[aria-expanded="true"]{border-color:var(--accent);}
+.deck-chip .deck-art{width:16px;height:22px;}
+.deck-chip .deck-art i{border-radius:3px;}
 .deck-art{position:relative;display:block;width:34px;height:46px;flex:0 0 auto;}
 .deck-art i{
   position:absolute;inset:0;border-radius:5px;
@@ -190,10 +196,6 @@ button.primary:hover:not(:disabled){background:#93aeff;}
 }
 .deck-art i:nth-child(1){transform:translate(-4px,-3px) rotate(-7deg);opacity:.55;}
 .deck-art i:nth-child(2){transform:translate(-2px,-1px) rotate(-3deg);opacity:.8;}
-.deck-meta{display:flex;flex-direction:column;align-items:flex-start;line-height:1.15;}
-.deck-meta b{font-size:17px;font-variant-numeric:tabular-nums;}
-.deck-meta small{font-size:10px;letter-spacing:.8px;text-transform:uppercase;color:var(--dim);}
-.deck[aria-expanded="true"]{border-color:var(--accent);}
 
 /* ============================================================
    CARD
@@ -261,6 +263,17 @@ button.primary:hover:not(:disabled){background:#93aeff;}
   font-size:11px;letter-spacing:1.2px;text-transform:uppercase;color:var(--dim);
   margin-bottom:12px;
 }
+.deck-section{
+  border:1px solid transparent;border-radius:11px;
+  padding:10px 12px 12px;
+  transition:border-color .2s,background .2s;
+}
+.deck-section + .deck-section{margin-top:10px;}
+.deck-section.focus{border-color:var(--accent);background:rgba(124,156,255,.06);}
+.deck-section-head{
+  font-size:11px;letter-spacing:1.2px;text-transform:uppercase;color:var(--dim);
+  margin-bottom:9px;
+}
 .deck-list{display:flex;gap:12px;justify-content:space-between;flex-wrap:wrap;}
 .deck-col{display:flex;flex-direction:column;align-items:center;gap:7px;flex:1 1 0;}
 .deck-col.gone{opacity:.4;}
@@ -268,7 +281,7 @@ button.primary:hover:not(:disabled){background:#93aeff;}
 .deck-cap{font-size:11px;color:var(--dim);font-variant-numeric:tabular-nums;}
 .deck-cap b{color:var(--text);font-size:13px;}
 .deck-summary{
-  margin-top:12px;padding-top:10px;border-top:1px solid var(--line);
+  margin-top:10px;padding-top:9px;border-top:1px solid var(--line);
   font-size:12px;color:var(--dim);text-align:center;
 }
 
@@ -281,7 +294,7 @@ kbd{background:var(--panel);border:1px solid var(--line);border-radius:4px;paddi
   .middle{flex-direction:column;align-items:stretch;gap:12px;}
   .actions{flex-direction:row;}
   .actions button{flex:1;}
-  .deck{justify-content:center;}
+  .side-label{flex-wrap:wrap;gap:8px;}
   .card.small{width:34px;height:46px;}
   .card.small .value{font-size:15px;}
 }
