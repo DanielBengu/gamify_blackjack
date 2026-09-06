@@ -85,10 +85,11 @@ const AI = (() => {
   let memo = new Map();
   let hp = { p: START_HP, a: START_HP };
 
-  function terminal(pT, pD, aT, aD) {
+  function terminal(pT, pD, aT, aD, dbl) {
     const r = roundResult(pT, pD, aT, aD);
     if (!r.winner) return 0;
-    return r.winner === "p" ? Math.min(r.dmg, hp.a) : -Math.min(r.dmg, hp.p);
+    const dmg = r.dmg * (dbl ? 2 : 1);           // doubling cuts both ways
+    return r.winner === "p" ? Math.min(dmg, hp.a) : -Math.min(dmg, hp.p);
   }
 
   /** Base-5 digits of one deck's counts: 0..15624. */
@@ -98,23 +99,51 @@ const AI = (() => {
     return k;
   }
 
-  /** Whole state as one integer-safe key (max ~8.6e11, well inside 2^53). */
-  function keyOf(pC, aC, pT, aT, pD, aD, turn) {
+  /** Whole state as one integer-safe key (max ~1.7e12, well inside 2^53). */
+  function keyOf(pC, aC, pT, aT, pD, aD, turn, dbl) {
     let k = deckKey(pC) * 15625 + deckKey(aC);
-    k = ((((k * 14 + pT) * 14 + aT) * 3 + pD) * 3 + aD) * 2 + turn;
+    k = (((((k * 14 + pT) * 14 + aT) * 3 + pD) * 3 + aD) * 2 + turn) * 2 + dbl;
     return k;
+  }
+
+  /** The deck a hit comes out of, reshuffled to full if its owner has run dry. */
+  function source(counts, n) {
+    return n === 0 ? { c: new Array(MAX_VAL).fill(COPIES), n: DECK_SIZE } : { c: counts, n };
+  }
+
+  /**
+   * The player's "double": take exactly one card, then stop — busting or not —
+   * with the round's damage doubled in both directions from here on.
+   * Only the player has this; the opponent never gets a double branch.
+   */
+  function doubleValue(pC, pN, aC, aN, pT, aT, aD) {
+    const s = source(pC, pN);
+    let out = 0;
+    for (let i = 0; i < MAX_VAL; i++) {
+      if (!s.c[i]) continue;
+      const p = s.c[i] / s.n, t = pT + (i + 1);
+      s.c[i]--;
+      out += p * (t > TARGET
+        ? ev(s.c, s.n - 1, aC, aN, TARGET + 1, aT, DONE_BUST,  aD, 1, 1)
+        : ev(s.c, s.n - 1, aC, aN, t,          aT, DONE_STOOD, aD, 1, 1));
+      s.c[i]++;
+    }
+    return out;
   }
 
   /**
    * Expected value of the position. `turn` is 0 for the player, 1 for the AI.
    * Totals are 0..TARGET while alive; a busted hand is stored as TARGET + 1.
+   * `dbl` is 1 once the player has doubled the round's stakes.
    */
-  function ev(pC, pN, aC, aN, pT, aT, pD, aD, turn) {
-    if (pD !== DONE_ACTIVE && aD !== DONE_ACTIVE) return terminal(pT, pD, aT, aD);
+  function ev(pC, pN, aC, aN, pT, aT, pD, aD, turn, dbl) {
+    // normalise: a stray undefined here would poison every memo key with NaN
+    dbl = dbl ? 1 : 0;
+    if (pD !== DONE_ACTIVE && aD !== DONE_ACTIVE) return terminal(pT, pD, aT, aD, dbl);
     if (turn === 0 && pD !== DONE_ACTIVE) turn = 1;
     if (turn === 1 && aD !== DONE_ACTIVE) turn = 0;
 
-    const key = keyOf(pC, aC, pT, aT, pD, aD, turn);
+    const key = keyOf(pC, aC, pT, aT, pD, aD, turn, dbl);
     const seen = memo.get(key);
     if (seen !== undefined) return seen;
 
@@ -122,69 +151,74 @@ const AI = (() => {
 
     // --- stand ---
     const stand = mine
-      ? ev(pC, pN, aC, aN, pT, aT, DONE_STOOD, aD, 1)
-      : ev(pC, pN, aC, aN, pT, aT, pD, DONE_STOOD, 0);
+      ? ev(pC, pN, aC, aN, pT, aT, DONE_STOOD, aD, 1, dbl)
+      : ev(pC, pN, aC, aN, pT, aT, pD, DONE_STOOD, 0, dbl);
 
     // --- hit --- the mover draws from their OWN deck, reshuffling it if empty
-    let src  = mine ? pC : aC;
-    let srcN = mine ? pN : aN;
-    if (srcN === 0) { src = new Array(MAX_VAL).fill(COPIES); srcN = DECK_SIZE; }
-
+    const s = source(mine ? pC : aC, mine ? pN : aN);
     let hit = 0;
     for (let i = 0; i < MAX_VAL; i++) {
-      if (!src[i]) continue;
-      const p = src[i] / srcN, v = i + 1;
-      src[i]--;
+      if (!s.c[i]) continue;
+      const p = s.c[i] / s.n, v = i + 1;
+      s.c[i]--;
       if (mine) {
         const t = pT + v;
         hit += p * (t > TARGET
-          ? ev(src, srcN - 1, aC, aN, TARGET + 1, aT, DONE_BUST, aD, 1)
-          : ev(src, srcN - 1, aC, aN, t, aT, DONE_ACTIVE, aD, 1));
+          ? ev(s.c, s.n - 1, aC, aN, TARGET + 1, aT, DONE_BUST, aD, 1, dbl)
+          : ev(s.c, s.n - 1, aC, aN, t, aT, DONE_ACTIVE, aD, 1, dbl));
       } else {
         const t = aT + v;
         hit += p * (t > TARGET
-          ? ev(pC, pN, src, srcN - 1, pT, TARGET + 1, pD, DONE_BUST, 0)
-          : ev(pC, pN, src, srcN - 1, pT, t, pD, DONE_ACTIVE, 0));
+          ? ev(pC, pN, s.c, s.n - 1, pT, TARGET + 1, pD, DONE_BUST, 0, dbl)
+          : ev(pC, pN, s.c, s.n - 1, pT, t, pD, DONE_ACTIVE, 0, dbl));
       }
-      src[i]++;
+      s.c[i]++;
     }
 
-    const out = mine ? Math.max(stand, hit) : Math.min(stand, hit);
+    let out;
+    if (mine) {
+      // the double is a third option, and only while the stakes are still single
+      out = Math.max(stand, hit);
+      if (!dbl) out = Math.max(out, doubleValue(pC, pN, aC, aN, pT, aT, aD));
+    } else {
+      out = Math.min(stand, hit);
+    }
     memo.set(key, out);
     return out;
   }
 
   /** Expected value of each action for whoever is to move, plus their bust risk. */
-  function actionValues(pC, pN, aC, aN, pT, aT, pD, aD, turn) {
+  function actionValues(pC, pN, aC, aN, pT, aT, pD, aD, turn, dbl) {
+    dbl = dbl ? 1 : 0;
     const mine = turn === 0;
     const stand = mine
-      ? ev(pC, pN, aC, aN, pT, aT, DONE_STOOD, aD, 1)
-      : ev(pC, pN, aC, aN, pT, aT, pD, DONE_STOOD, 0);
+      ? ev(pC, pN, aC, aN, pT, aT, DONE_STOOD, aD, 1, dbl)
+      : ev(pC, pN, aC, aN, pT, aT, pD, DONE_STOOD, 0, dbl);
 
-    let src  = mine ? pC : aC;
-    let srcN = mine ? pN : aN;
-    let reshuffles = false;
-    if (srcN === 0) { src = new Array(MAX_VAL).fill(COPIES); srcN = DECK_SIZE; reshuffles = true; }
+    const s = source(mine ? pC : aC, mine ? pN : aN);
+    const reshuffles = (mine ? pN : aN) === 0;
 
     let hit = 0, bust = 0;
     const total = mine ? pT : aT;
     for (let i = 0; i < MAX_VAL; i++) {
-      if (!src[i]) continue;
-      const p = src[i] / srcN, v = i + 1, t = total + v;
+      if (!s.c[i]) continue;
+      const p = s.c[i] / s.n, v = i + 1, t = total + v;
       if (t > TARGET) bust += p;
-      src[i]--;
+      s.c[i]--;
       if (mine) {
         hit += p * (t > TARGET
-          ? ev(src, srcN - 1, aC, aN, TARGET + 1, aT, DONE_BUST, aD, 1)
-          : ev(src, srcN - 1, aC, aN, t, aT, DONE_ACTIVE, aD, 1));
+          ? ev(s.c, s.n - 1, aC, aN, TARGET + 1, aT, DONE_BUST, aD, 1, dbl)
+          : ev(s.c, s.n - 1, aC, aN, t, aT, DONE_ACTIVE, aD, 1, dbl));
       } else {
         hit += p * (t > TARGET
-          ? ev(pC, pN, src, srcN - 1, pT, TARGET + 1, pD, DONE_BUST, 0)
-          : ev(pC, pN, src, srcN - 1, pT, t, pD, DONE_ACTIVE, 0));
+          ? ev(pC, pN, s.c, s.n - 1, pT, TARGET + 1, pD, DONE_BUST, 0, dbl)
+          : ev(pC, pN, s.c, s.n - 1, pT, t, pD, DONE_ACTIVE, 0, dbl));
       }
-      src[i]++;
+      s.c[i]++;
     }
-    return { stand, hit, bust, reshuffles };
+
+    const dv = (mine && !dbl) ? doubleValue(pC, pN, aC, aN, pT, aT, aD) : null;
+    return { stand, hit, bust, reshuffles, double: dv };
   }
 
   return {
@@ -199,8 +233,8 @@ const AI = (() => {
      * temp 1 always takes the better action. Below that it picks from a softmax
      * over the true expected values, so its mistakes are close calls first.
      */
-    decide(pC, pN, aC, aN, pT, aT, pD, aD, temp) {
-      const { stand, hit } = actionValues(pC, pN, aC, aN, pT, aT, pD, aD, 1);
+    decide(pC, pN, aC, aN, pT, aT, pD, aD, temp, dbl) {
+      const { stand, hit } = actionValues(pC, pN, aC, aN, pT, aT, pD, aD, 1, dbl ? 1 : 0);
       if (temp >= 1) return hit < stand ? "hit" : "stand";   // AI minimises
       // The 0.6 floor keeps the far-left of the dial from degenerating into a
       // coin flip — Easy should play badly, not randomly.
@@ -232,7 +266,8 @@ const el = {
   pScoreNum: $("pScoreNum"), aiScoreNum: $("aiScoreNum"),
   status: $("status"), odds: $("oddsLine"),
   deckPanel: $("deckPanel"), deckClose: $("deckClose"),
-  hitBtn: $("hitBtn"), standBtn: $("standBtn")
+  hitBtn: $("hitBtn"), standBtn: $("standBtn"), doubleBtn: $("doubleBtn"),
+  stakes: $("stakes")
 };
 
 function cardNode(value, opts = {}) {
@@ -325,6 +360,7 @@ const G = {
   p: { hand: [], deck: [], done: DONE_ACTIVE, hp: START_HP, reshuffled: false },
   a: { hand: [], deck: [], done: DONE_ACTIVE, hp: START_HP, reshuffled: false },
   turn: 0,                 // 0 = player, 1 = AI
+  doubled: false,          // player doubled this round: all damage counts twice
   playerFirst: true,
   phase: "idle",           // idle | playing | roundover | matchover
   temp: 0.5,
@@ -362,6 +398,7 @@ function startRound() {
   G.turn = G.playerFirst ? 0 : 1;
   G.playerFirst = !G.playerFirst;
   G.phase = "playing";
+  G.doubled = false;
   G.busy = true;
   AI.reset(G.p.hp, G.a.hp);
 
@@ -425,6 +462,28 @@ function playerHit() {
   });
 }
 
+/**
+ * Double: one more card, then you're done either way, and every point of damage
+ * this round counts twice — dealt AND taken. The opponent never gets this.
+ */
+function playerDouble() {
+  if (G.phase !== "playing" || G.busy || G.turn !== 0 ||
+      G.p.done !== DONE_ACTIVE || G.doubled) return;
+  G.busy = true;
+  G.doubled = true;
+  setStatus("<span class='hl'>Doubled.</span> One card, then you're out — stakes are ×2 both ways.");
+  render();
+  dealTo("p", () => {
+    if (G.p.done === DONE_BUST) {
+      setStatus(`You doubled into ${total("p")} — <span class="hl">bust, at double stakes</span>.`, "lose");
+    } else {
+      G.p.done = DONE_STOOD;
+      setStatus(`Doubled and standing on ${total("p")}.`);
+    }
+    afterAction();
+  });
+}
+
 function playerStand() {
   if (G.phase !== "playing" || G.busy || G.turn !== 0 || G.p.done !== DONE_ACTIVE) return;
   G.busy = true;
@@ -442,7 +501,7 @@ function aiMove() {
   const move = AI.decide(
     countsOf(G.p.deck), G.p.deck.length,
     countsOf(G.a.deck), G.a.deck.length,
-    total("p"), total("a"), G.p.done, G.a.done, G.temp);
+    total("p"), total("a"), G.p.done, G.a.done, G.temp, G.doubled);
 
   if (move === "stand") {
     G.a.done = DONE_STOOD;
@@ -465,6 +524,15 @@ function resolveRound() {
   G.busy = true;
   const pT = total("p"), aT = total("a");
   const r = roundResult(pT, G.p.done, aT, G.a.done);
+  const dmg = r.dmg * (G.doubled ? 2 : 1);
+
+  // "1" / "CRIT! 2" / "2 (doubled)" / "CRIT! 4 (doubled crit)"
+  const dmgText = () => {
+    if (r.dmg === 2 && G.doubled) return "CRIT ×2! 4 damage";
+    if (r.dmg === 2)              return "CRIT! 2 damage";
+    if (G.doubled)                return "2 damage (doubled)";
+    return "1 damage";
+  };
 
   let msg, cls;
   if (!r.winner) {
@@ -473,14 +541,14 @@ function resolveRound() {
       : `Both on ${pT} — push, no damage.`;
     cls = "tie";
   } else if (r.winner === "p") {
-    G.a.hp = Math.max(0, G.a.hp - r.dmg);
+    G.a.hp = Math.max(0, G.a.hp - dmg);
     msg = `${pT} beats ${aT}${G.a.done === DONE_BUST ? " (bust)" : ""} — ` +
-          `<span class="hl">${r.dmg === 2 ? "CRIT! 2 damage" : "1 damage"}</span>`;
+          `<span class="hl">${dmgText()}</span>`;
     cls = "win";
   } else {
-    G.p.hp = Math.max(0, G.p.hp - r.dmg);
+    G.p.hp = Math.max(0, G.p.hp - dmg);
     msg = `${aT} beats ${pT}${G.p.done === DONE_BUST ? " (bust)" : ""} — ` +
-          `<span class="hl">${r.dmg === 2 ? "CRIT! 2 damage" : "1 damage"}</span>`;
+          `<span class="hl">${dmgText()}</span>`;
     cls = "lose";
   }
 
@@ -492,7 +560,7 @@ function resolveRound() {
 
   // the round landing gets a bigger swell than an ordinary draw; a crit bigger still
   if (r.winner) {
-    pop(r.winner === "p" ? el.pScoreNum : el.aiScoreNum, r.dmg === 2 ? 2 : 1.7, 560);
+    pop(r.winner === "p" ? el.pScoreNum : el.aiScoreNum, dmg >= 4 ? 2.3 : dmg >= 2 ? 2 : 1.7, 560);
   } else {
     pop(el.pScoreNum, 1.25, 460);
     pop(el.aiScoreNum, 1.25, 460);
@@ -541,6 +609,8 @@ function render() {
   const myMove = G.phase === "playing" && !G.busy && G.turn === 0 && G.p.done === DONE_ACTIVE;
   el.hitBtn.disabled = !myMove;
   el.standBtn.disabled = !myMove;
+  el.doubleBtn.disabled = !myMove || G.doubled;
+  el.stakes.className = "stakes" + (G.doubled ? " on" : "");
 
   if (G.deckOpen) renderDeckPanel();
   renderOdds();
@@ -584,14 +654,19 @@ function renderOdds() {
     el.odds.textContent = "";
     return;
   }
-  const { stand, hit, bust } = AI.actionValues(
+  const av = AI.actionValues(
     countsOf(G.p.deck), G.p.deck.length,
     countsOf(G.a.deck), G.a.deck.length,
-    total("p"), total("a"), G.p.done, G.a.done, 0);
-  const best = hit > stand ? "hit" : "stand";
+    total("p"), total("a"), G.p.done, G.a.done, 0, G.doubled ? 1 : 0);
+
+  const options = [["hit", av.hit], ["stand", av.stand]];
+  if (av.double !== null) options.push(["double", av.double]);
+  const best = options.reduce((a, b) => (b[1] > a[1] ? b : a))[0];
+
   el.odds.innerHTML =
-    `Hitting busts <b>${Math.round(bust * 100)}%</b> of the time · ` +
-    `hit <b>${fmt(hit)}</b> vs stand <b>${fmt(stand)}</b> · best: <b>${best}</b>`;
+    `Hitting busts <b>${Math.round(av.bust * 100)}%</b> of the time · ` +
+    options.map(([n, v]) => `${n} <b>${fmt(v)}</b>`).join(" vs ") +
+    ` · best: <b>${best}</b>`;
 }
 
 const fmt = x => (x >= 0 ? "+" : "") + x.toFixed(2);
@@ -666,6 +741,7 @@ function toggleDeck(side, force) {
 
 el.hitBtn.addEventListener("click", playerHit);
 el.standBtn.addEventListener("click", playerStand);
+el.doubleBtn.addEventListener("click", playerDouble);
 $("newBtn").addEventListener("click", newMatch);
 el.pDeckBtn.addEventListener("click", () => toggleDeck("p"));
 el.aiDeckBtn.addEventListener("click", () => toggleDeck("a"));
@@ -701,6 +777,7 @@ document.addEventListener("keydown", e => {
   if (k === "escape") { toggleDeck(null, false); return; }
   if (k === "h") playerHit();
   if (k === "s") playerStand();
+  if (k === "2" || k === "x") playerDouble();
 });
 
 try {

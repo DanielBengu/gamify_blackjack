@@ -201,6 +201,31 @@ button.primary:hover:not(:disabled){background:#93aeff;}
 .actions{display:flex;flex-direction:column;gap:8px;}
 .actions button{min-width:86px;}
 
+/* Double: the risky one, so it looks like it */
+button.double{
+  border-color:#7a4a1c;color:var(--hard);font-weight:600;
+  background:linear-gradient(180deg,rgba(201,112,31,.16),rgba(201,112,31,.06));
+}
+button.double:hover:not(:disabled){
+  background:linear-gradient(180deg,rgba(201,112,31,.3),rgba(201,112,31,.12));
+  border-color:var(--hard);color:#eba76b;
+}
+
+/* the badge that says this round is worth double */
+.stakes{
+  display:none;
+  font-size:10px;font-weight:700;letter-spacing:1.6px;text-transform:uppercase;
+  color:var(--hard);
+  border:1px solid rgba(201,112,31,.5);
+  background:rgba(201,112,31,.12);
+  border-radius:999px;padding:3px 10px;
+}
+.stakes.on{display:block;animation:stakesIn .4s cubic-bezier(.34,1.56,.64,1);}
+@keyframes stakesIn{
+  from{opacity:0;transform:scale(.6);}
+  to{opacity:1;transform:scale(1);}
+}
+
 /* each player's own deck: a compact clickable chip in their label row */
 .deck-chip{
   display:flex;align-items:center;gap:8px;

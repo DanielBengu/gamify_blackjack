@@ -25,6 +25,10 @@ keeps drawing alone until they stand or bust. Who moves first alternates each ro
 that's a **crit** for **2 damage** — including when they win because the other player busted.
 Busting loses to any surviving total, however low. Equal totals, or both busting, is a push.
 
+**Double.** Only you have this. Press it and you draw exactly one card, then you're
+out of the round either way — busting or not. In exchange, every point of damage this round counts
+**twice, in both directions**: win it for 2, win it on the nose for 4, lose it for 2, bust for 2.
+
 **The match.** You start on **5 HP**. First to zero loses.
 
 **The deck viewer.** Each player has a deck chip next to their name showing how many cards they
@@ -54,10 +58,30 @@ max (you) or min (the opponent); a hit is a chance node weighted by the exact co
 **the mover's own deck**. An empty deck reshuffles inside the search too, so the model never
 diverges from the real game.
 
-Carrying two deck compositions instead of one is what makes this the expensive part: the worst
-case — start of a round, both decks full — takes about 55 ms cold, and typical mid-round solves
-land near 15 ms. The memo is kept for the whole round, so every decision after the first is
+The state also carries a **double flag**, because the stakes change the payoff at every leaf, and
+the player's choice nodes get a third branch the opponent's never do: draw one, stop, multiply.
+
+Carrying two deck compositions plus that extra branch is what makes this the expensive part: the
+worst case — start of a round, both decks full — takes about 120 ms cold, and typical mid-round
+solves land near 35 ms. The memo is kept for the whole round, so every decision after the first is
 effectively free.
+
+### When doubling is actually correct
+
+Because the solver knows the true value of every option, it can answer this directly. The answer
+is narrower than you might expect:
+
+| Your HP | Positions (of 121) where doubling beats hit and stand |
+|---|---|
+| 5, 3, or 2 | **0** |
+| 1 | **40**, worth up to +0.37 damage |
+
+Two things fight the double. The forced draw-then-stand is a real constraint — you give up the
+right to react — and at healthy HP the value of a round sits near zero, so doubling it gains
+almost nothing. But at **1 HP your downside is already capped**: you cannot lose more than the one
+point you have left, so the ×2 on damage taken costs you nothing while the ×2 on damage dealt is
+free. That makes it a genuine comeback button, and close to a pure gain when you're one hit from
+losing.
 
 The value is **expected damage swing**, clamped by each side's remaining HP — so the opponent
 knows not to waste a crit on someone sitting at 1 HP, and knows when it needs one.
@@ -142,8 +166,12 @@ whatever composition you give it.
   player a different composition — more high cards, fewer copies — and it still plays exactly.
 - **A hole card.** Deal each player one face-down card. That breaks perfect information and turns
   the solver into a belief problem — much closer to real blackjack.
-- **Doubling down.** Let a player declare, before hitting, that this round is worth double damage
-  to whoever wins it. One extra branch at each choice node.
+- **Widen the double.** It currently only pays off at 1 HP (see above). Dropping the auto-stand, or
+  letting you keep hitting after the mandatory card, would make it a live decision at every HP —
+  both are a couple of lines in `doubleValue` and `playerDouble`.
+- **Give the opponent a double.** The solver already has the branch; it's simply never offered on
+  the minimising side. Wiring it up means adding a second flag so each side's stakes track
+  separately.
 - **Deck counting off.** Hide the deck viewer above a certain difficulty as a handicap, or make it
   cost something to open.
 - **Best-of-N with escalating stakes.** Damage rises each round, so late rounds decide matches.

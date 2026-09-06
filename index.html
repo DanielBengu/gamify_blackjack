@@ -6,7 +6,7 @@
 <title>Card 12</title>
 <!-- ?v= is a cache buster: bump it whenever style.css or game.js changes,
      so browsers can't serve a stale pair of files against fresh markup. -->
-<link rel="stylesheet" href="style.css?v=3">
+<link rel="stylesheet" href="style.css?v=4">
 </head>
 <body>
 <div class="app">
@@ -53,6 +53,7 @@
         <span class="score-cap">You</span>
       </div>
       <div class="middle-text">
+        <div class="stakes" id="stakes">Double stakes &times;2</div>
         <div class="status" id="status">Dealing…</div>
         <div class="odds" id="oddsLine"></div>
       </div>
@@ -63,6 +64,8 @@
       <div class="actions">
         <button id="hitBtn" class="primary" disabled>Hit</button>
         <button id="standBtn" disabled>Stand</button>
+        <button id="doubleBtn" class="double" disabled
+                title="Draw one card, then stand. All damage this round counts twice — both ways.">Double</button>
       </div>
     </div>
 
@@ -102,11 +105,12 @@
 
   <footer>
     You each draw from your own 24-card deck &middot; get closer to 12 than the opponent without going over &middot; land on 12 exactly to crit for double damage<br>
-    Keys: <kbd>H</kbd> hit &middot; <kbd>S</kbd> stand &middot; <kbd>D</kbd> your deck &middot; <kbd>O</kbd> their deck &middot; <kbd>N</kbd> new match
+    Double draws one card then stands, and makes the round worth double damage &mdash; dealt and taken<br>
+    Keys: <kbd>H</kbd> hit &middot; <kbd>S</kbd> stand &middot; <kbd>2</kbd> double &middot; <kbd>D</kbd> your deck &middot; <kbd>O</kbd> their deck &middot; <kbd>N</kbd> new match
   </footer>
 
 </div>
 
-<script src="game.js?v=3" defer></script>
+<script src="game.js?v=4" defer></script>
 </body>
 </html>
