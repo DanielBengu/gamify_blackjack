@@ -1,0 +1,89 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Card 12</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<div class="app">
+
+  <header>
+    <div class="brand">
+      <h1>Card 12</h1>
+    </div>
+    <div class="controls">
+      <div class="tally">
+        <span>W <b id="tw">0</b></span>
+        <span>D <b id="td">0</b></span>
+        <span>L <b id="tl">0</b></span>
+      </div>
+      <div class="temp">
+        <label for="tempSlider">Opponent</label>
+        <input id="tempSlider" type="range" min="0" max="100" step="1" value="50"
+               aria-describedby="tempLabel">
+        <span id="tempLabel" class="temp-label">Normal</span>
+      </div>
+      <button id="oddsBtn">Odds: on</button>
+      <button id="newBtn" class="primary">New match</button>
+    </div>
+  </header>
+
+  <div class="board">
+
+    <section class="side opponent">
+      <div class="side-label">
+        <span>Opponent <span class="total" id="aiTotal">—</span></span>
+        <span class="hp" id="aiHp"></span>
+      </div>
+      <div class="row" id="aiHand"></div>
+    </section>
+
+    <div class="middle">
+      <button id="deckBtn" class="deck" aria-expanded="false" title="Show what's left in the deck">
+        <span class="deck-art"><i></i><i></i><i></i></span>
+        <span class="deck-meta">
+          <b id="deckCount">24</b>
+          <small>in deck</small>
+        </span>
+      </button>
+      <div class="middle-text">
+        <div class="status" id="status">Dealing…</div>
+        <div class="odds" id="oddsLine"></div>
+      </div>
+      <div class="actions">
+        <button id="hitBtn" class="primary" disabled>Hit</button>
+        <button id="standBtn" disabled>Stand</button>
+      </div>
+    </div>
+
+    <section class="side">
+      <div class="side-label">
+        <span>You <span class="total" id="pTotal">—</span></span>
+        <span class="hp" id="pHp"></span>
+      </div>
+      <div class="row" id="pHand"></div>
+    </section>
+
+  </div>
+
+  <div class="deck-panel" id="deckPanel">
+    <div class="deck-panel-head">
+      <span>Still in the deck</span>
+      <button id="deckClose">Close</button>
+    </div>
+    <div class="deck-list" id="deckList"></div>
+    <div class="deck-summary" id="deckSummary"></div>
+  </div>
+
+  <footer>
+    Get closer to 12 than the opponent without going over &middot; land on 12 exactly to crit for double damage<br>
+    Keys: <kbd>H</kbd> hit &middot; <kbd>S</kbd> stand &middot; <kbd>D</kbd> deck &middot; <kbd>N</kbd> new match
+  </footer>
+
+</div>
+
+<script src="game.js" defer></script>
+</body>
+</html>
