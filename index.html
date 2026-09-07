@@ -6,7 +6,7 @@
 <title>Card 12</title>
 <!-- ?v= is a cache buster: bump it whenever style.css or game.js changes,
      so browsers can't serve a stale pair of files against fresh markup. -->
-<link rel="stylesheet" href="style.css?v=4">
+<link rel="stylesheet" href="style.css?v=7">
 </head>
 <body>
 <div class="app">
@@ -51,15 +51,21 @@
       <div class="score" id="pScore">
         <span class="score-num" id="pScoreNum">–</span>
         <span class="score-cap">You</span>
+        <span class="guard" id="pGuard">−1 blocked</span>
       </div>
       <div class="middle-text">
         <div class="stakes" id="stakes">Double stakes &times;2</div>
         <div class="status" id="status">Dealing…</div>
+        <div class="thinking" id="thinking">
+          <span class="dots"><i></i><i></i><i></i></span>
+          <span id="thinkingLabel">Calculating move</span>
+        </div>
         <div class="odds" id="oddsLine"></div>
       </div>
       <div class="score" id="aiScore">
         <span class="score-num" id="aiScoreNum">–</span>
         <span class="score-cap">Opponent</span>
+        <span class="guard" id="aiGuard">−1 blocked</span>
       </div>
       <div class="actions">
         <button id="hitBtn" class="primary" disabled>Hit</button>
@@ -104,13 +110,15 @@
   </div>
 
   <footer>
-    You each draw from your own 24-card deck &middot; get closer to 12 than the opponent without going over &middot; land on 12 exactly to crit for double damage<br>
+    You each draw from your own 24-card deck &middot; get closer to 12 than the opponent without going over<br>
+    Every point you win by lands one attack for 5 damage &middot; busting drops you to your previous score minus 2 &middot; landing on 12 crits a third of your attacks<br>
+    Standing guards you: 1 attack blocked if you lose the round &mdash; busting guards nothing<br>
     Double draws one card then stands, and makes the round worth double damage &mdash; dealt and taken<br>
     Keys: <kbd>H</kbd> hit &middot; <kbd>S</kbd> stand &middot; <kbd>2</kbd> double &middot; <kbd>D</kbd> your deck &middot; <kbd>O</kbd> their deck &middot; <kbd>N</kbd> new match
   </footer>
 
 </div>
 
-<script src="game.js?v=4" defer></script>
+<script src="game.js?v=7" defer></script>
 </body>
 </html>

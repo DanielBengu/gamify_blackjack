@@ -33,7 +33,18 @@ if (typeof window !== "undefined" && typeof window.addEventListener === "functio
 const TARGET   = 12;   // go over this and you bust
 const COPIES   = 4;    // copies of each value in a deck
 const MAX_VAL  = 6;
-const START_HP = 5;
+const START_HP = 100;
+const ATK      = 5;    // health lost per attack landed
+const BUST_COST = 2;   // a bust falls back to its pre-bust score, minus this
+const CRIT_SHARE = 3;  // landing on 12 crits one attack in this many (rounded up)
+const BLOCK_ON_STAND = 1;  // attacks absorbed by choosing to stand rather than busting
+
+/**
+ * At or below this total a draw cannot take you over the target, so hitting is
+ * free and standing is strictly dominated. Derived rather than hard-coded, so
+ * it stays correct if TARGET or MAX_VAL are retuned.
+ */
+const SAFE_CEILING = TARGET - MAX_VAL;
 const DECK_SIZE = COPIES * MAX_VAL;
 
 const DONE_ACTIVE = 0, DONE_STOOD = 1, DONE_BUST = 2;
@@ -58,18 +69,61 @@ function countsOf(deck) {
 }
 
 /**
- * Who won the round and for how much.
- * Busting loses. Otherwise the higher total wins. Landing exactly on the
- * target is a crit and deals double. Equal totals, or both busting, is a push.
+ * The score a round is *measured* by. A live hand counts for its total; a bust
+ * falls back to whatever it held before the fatal card, minus BUST_COST, and
+ * never below zero. Totals passed in here are always the pre-bust ones, so a
+ * busted hand is identified by its flag rather than by being over the target.
  */
-function roundResult(pT, pD, aT, aD) {
+function scoreOf(t, done) {
+  return done === DONE_BUST ? Math.max(0, t - BUST_COST) : t;
+}
+
+/**
+ * Who won the round, and how hard.
+ *
+ * Busting loses outright, however good the fallback score looks. Otherwise the
+ * higher total takes it. The winner then lands one attack per point of
+ * difference between the two measured scores — so a narrow win barely stings
+ * and a rout is devastating.
+ *
+ * Choosing to STAND is a defensive act: a stander absorbs BLOCK_ON_STAND of the
+ * attacks aimed at them. Busting out of the round earns no such protection.
+ * That is what stops the game collapsing into "always hit" — sitting on a
+ * modest total concedes the margin but blunts the punishment, and a win by a
+ * single point against a stander lands nothing at all.
+ *
+ * Landing exactly on the target turns one attack in every CRIT_SHARE (rounded
+ * up) into a crit worth double — reckoned on the attacks that actually get
+ * through, not the ones that were blocked.
+ */
+function roundOutcome(pT, pD, aT, aD) {
   const pB = pD === DONE_BUST, aB = aD === DONE_BUST;
-  if (pB && aB) return { winner: null, dmg: 0 };
-  if (pB)       return { winner: "a", dmg: aT === TARGET ? 2 : 1 };
-  if (aB)       return { winner: "p", dmg: pT === TARGET ? 2 : 1 };
-  if (pT > aT)  return { winner: "p", dmg: pT === TARGET ? 2 : 1 };
-  if (aT > pT)  return { winner: "a", dmg: aT === TARGET ? 2 : 1 };
-  return { winner: null, dmg: 0 };
+
+  let winner = null;
+  if (pB && aB)      winner = null;
+  else if (pB)       winner = "a";
+  else if (aB)       winner = "p";
+  else if (pT > aT)  winner = "p";
+  else if (aT > pT)  winner = "a";
+  if (!winner) return { winner: null, raw: 0, blocked: 0, hits: 0, crits: 0 };
+
+  const pS = scoreOf(pT, pD), aS = scoreOf(aT, aD);
+  const raw = Math.max(0, winner === "p" ? pS - aS : aS - pS);
+
+  // The guard never blocks the last attack: a won round always draws blood.
+  // Letting it nullify a one-point win left roughly half of all rounds scoreless.
+  const loserStood = (winner === "p" ? aD : pD) === DONE_STOOD;
+  const blocked = loserStood ? Math.min(BLOCK_ON_STAND, Math.max(0, raw - 1)) : 0;
+  const hits = raw - blocked;
+
+  const onTarget = (winner === "p" ? pT : aT) === TARGET;
+  const crits = onTarget ? Math.ceil(hits / CRIT_SHARE) : 0;
+  return { winner, raw, blocked, hits, crits };
+}
+
+/** Health taken off the loser: every attack costs ATK, and a crit costs twice. */
+function damageOf(o, doubled) {
+  return (o.hits + o.crits) * ATK * (doubled ? 2 : 1);
 }
 
 /* ============================================================================
@@ -86,10 +140,10 @@ const AI = (() => {
   let hp = { p: START_HP, a: START_HP };
 
   function terminal(pT, pD, aT, aD, dbl) {
-    const r = roundResult(pT, pD, aT, aD);
-    if (!r.winner) return 0;
-    const dmg = r.dmg * (dbl ? 2 : 1);           // doubling cuts both ways
-    return r.winner === "p" ? Math.min(dmg, hp.a) : -Math.min(dmg, hp.p);
+    const o = roundOutcome(pT, pD, aT, aD);
+    if (!o.winner) return 0;
+    const dmg = damageOf(o, dbl);                // doubling cuts both ways
+    return o.winner === "p" ? Math.min(dmg, hp.a) : -Math.min(dmg, hp.p);
   }
 
   /** Base-5 digits of one deck's counts: 0..15624. */
@@ -124,7 +178,7 @@ const AI = (() => {
       const p = s.c[i] / s.n, t = pT + (i + 1);
       s.c[i]--;
       out += p * (t > TARGET
-        ? ev(s.c, s.n - 1, aC, aN, TARGET + 1, aT, DONE_BUST,  aD, 1, 1)
+        ? ev(s.c, s.n - 1, aC, aN, pT, aT, DONE_BUST,  aD, 1, 1)
         : ev(s.c, s.n - 1, aC, aN, t,          aT, DONE_STOOD, aD, 1, 1));
       s.c[i]++;
     }
@@ -133,7 +187,8 @@ const AI = (() => {
 
   /**
    * Expected value of the position. `turn` is 0 for the player, 1 for the AI.
-   * Totals are 0..TARGET while alive; a busted hand is stored as TARGET + 1.
+   * Totals are 0..TARGET throughout: a bust keeps the score it held before the
+   * fatal card and is identified by its DONE_BUST flag, not by its number.
    * `dbl` is 1 once the player has doubled the round's stakes.
    */
   function ev(pC, pN, aC, aN, pT, aT, pD, aD, turn, dbl) {
@@ -164,12 +219,12 @@ const AI = (() => {
       if (mine) {
         const t = pT + v;
         hit += p * (t > TARGET
-          ? ev(s.c, s.n - 1, aC, aN, TARGET + 1, aT, DONE_BUST, aD, 1, dbl)
+          ? ev(s.c, s.n - 1, aC, aN, pT, aT, DONE_BUST, aD, 1, dbl)
           : ev(s.c, s.n - 1, aC, aN, t, aT, DONE_ACTIVE, aD, 1, dbl));
       } else {
         const t = aT + v;
         hit += p * (t > TARGET
-          ? ev(pC, pN, s.c, s.n - 1, pT, TARGET + 1, pD, DONE_BUST, 0, dbl)
+          ? ev(pC, pN, s.c, s.n - 1, pT, aT, pD, DONE_BUST, 0, dbl)
           : ev(pC, pN, s.c, s.n - 1, pT, t, pD, DONE_ACTIVE, 0, dbl));
       }
       s.c[i]++;
@@ -207,11 +262,11 @@ const AI = (() => {
       s.c[i]--;
       if (mine) {
         hit += p * (t > TARGET
-          ? ev(s.c, s.n - 1, aC, aN, TARGET + 1, aT, DONE_BUST, aD, 1, dbl)
+          ? ev(s.c, s.n - 1, aC, aN, pT, aT, DONE_BUST, aD, 1, dbl)
           : ev(s.c, s.n - 1, aC, aN, t, aT, DONE_ACTIVE, aD, 1, dbl));
       } else {
         hit += p * (t > TARGET
-          ? ev(pC, pN, s.c, s.n - 1, pT, TARGET + 1, pD, DONE_BUST, 0, dbl)
+          ? ev(pC, pN, s.c, s.n - 1, pT, aT, pD, DONE_BUST, 0, dbl)
           : ev(pC, pN, s.c, s.n - 1, pT, t, pD, DONE_ACTIVE, 0, dbl));
       }
       s.c[i]++;
@@ -234,11 +289,24 @@ const AI = (() => {
      * over the true expected values, so its mistakes are close calls first.
      */
     decide(pC, pN, aC, aN, pT, aT, pD, aD, temp, dbl) {
+      // Below TARGET - MAX_VAL + 1 a draw cannot possibly bust you, so standing
+      // is strictly dominated by hitting — verified across every position. A
+      // blunder that obvious reads as a broken opponent rather than an easy one,
+      // so the dial never gets to make it, at any temperature.
+      if (aT <= SAFE_CEILING) return "hit";
+
       const { stand, hit } = actionValues(pC, pN, aC, aN, pT, aT, pD, aD, 1, dbl ? 1 : 0);
       if (temp >= 1) return hit < stand ? "hit" : "stand";   // AI minimises
       // The 0.6 floor keeps the far-left of the dial from degenerating into a
       // coin flip — Easy should play badly, not randomly.
-      const sharp = 0.6 + 15 * temp * temp;
+      //
+      // SCALE matters here. These values are expected damage in *health points*,
+      // so a typical decision is worth ~25 of them; feeding that straight into
+      // exp() saturates the softmax and the dial stops doing anything at all.
+      // Dividing by a characteristic decision size keeps the curve meaningful,
+      // and keeps it meaningful if ATK or START_HP are ever retuned.
+      const SPREAD = 8 * ATK;
+      const sharp = (0.6 + 15 * temp * temp) / SPREAD;
       const wHit   = Math.exp(-hit   * sharp);
       const wStand = Math.exp(-stand * sharp);
       return Math.random() * (wHit + wStand) < wHit ? "hit" : "stand";
@@ -264,10 +332,12 @@ const el = {
   pDeckCount: $("pDeckCount"), aiDeckCount: $("aiDeckCount"),
   pScore: $("pScore"), aiScore: $("aiScore"),
   pScoreNum: $("pScoreNum"), aiScoreNum: $("aiScoreNum"),
+  pGuard: $("pGuard"), aiGuard: $("aiGuard"),
   status: $("status"), odds: $("oddsLine"),
   deckPanel: $("deckPanel"), deckClose: $("deckClose"),
   hitBtn: $("hitBtn"), standBtn: $("standBtn"), doubleBtn: $("doubleBtn"),
-  stakes: $("stakes")
+  stakes: $("stakes"),
+  thinking: $("thinking"), thinkingLabel: $("thinkingLabel")
 };
 
 function cardNode(value, opts = {}) {
@@ -318,6 +388,35 @@ function flyCard(value, from, to, destNode, done) {
   setTimeout(finish, 750);
 }
 
+/* ---------------------------------------------------------------------------
+   Thinking indicator.
+
+   The solver runs synchronously and blocks the thread, so a spinner shown in
+   the same tick would never paint. Everything slow therefore goes through
+   afterPaint(), which yields two frames first. Solve cost is measured as it
+   goes, and anything that has recently been slow switches to the deferred path
+   automatically — so as the search grows, the indicator starts earning its keep
+   without any of this needing to be revisited.
+   --------------------------------------------------------------------------- */
+
+const SLOW_MS = 80;
+let lastSolveMs = 0;
+
+const raf = fn => (typeof requestAnimationFrame === "function")
+  ? requestAnimationFrame(fn)
+  : setTimeout(fn, 16);
+
+/** Run `fn` only after the browser has had a chance to paint. */
+const afterPaint = fn => raf(() => raf(fn));
+
+function noteSolve(ms) { lastSolveMs = ms; }
+const solverIsSlow = () => lastSolveMs >= SLOW_MS;
+
+function setThinking(on, label) {
+  el.thinking.className = "thinking" + (on ? " on" : "");
+  if (label) el.thinkingLabel.textContent = label;
+}
+
 /** Swell and settle. Used whenever a score changes, harder when a round lands. */
 function pop(node, strength = 1.4, duration = 400) {
   if (!node || typeof node.animate !== "function") return;
@@ -328,13 +427,59 @@ function pop(node, strength = 1.4, duration = 400) {
   ], { duration, easing: "cubic-bezier(.34,1.56,.64,1)" });
 }
 
+/** A health bar that drains, and reddens as it gets low. */
 function renderHp(node, hp) {
-  node.innerHTML = "";
-  for (let i = 0; i < START_HP; i++) {
-    const s = document.createElement("span");
-    s.className = "hp-pip" + (i < hp ? " on" : "");
-    node.appendChild(s);
+  if (!node._fill) {
+    node.innerHTML = "";
+    const track = document.createElement("span");
+    track.className = "hp-track";
+    const fill = document.createElement("span");
+    fill.className = "hp-fill";
+    track.appendChild(fill);
+    const num = document.createElement("span");
+    num.className = "hp-num";
+    node.appendChild(track);
+    node.appendChild(num);
+    node._fill = fill;
+    node._num = num;
   }
+  const pct = Math.max(0, Math.min(100, hp / START_HP * 100));
+  node._fill.style.width = pct.toFixed(2).replace(/\.?0+$/, "") + "%";
+  node._fill.className = "hp-fill" + (pct <= 20 ? " critical" : pct <= 50 ? " hurt" : "");
+  node._num.textContent = hp;
+}
+
+/**
+ * A damage number that lifts off the side that just got hit and fades.
+ * Purely decorative — if the browser can't animate, nothing is missed.
+ */
+function floatDamage(side, dmg, crit) {
+  const host = side === "p" ? el.pHp : el.aiHp;
+  if (!host || typeof host.getBoundingClientRect !== "function") return;
+  const r = host.getBoundingClientRect();
+  const n = document.createElement("div");
+  n.className = "dmg-float" + (crit ? " crit" : "");
+  n.textContent = "-" + dmg;
+  Object.assign(n.style, {
+    position: "fixed",
+    left: (r.left + r.width / 2) + "px",
+    top: r.top + "px",
+    zIndex: "90",
+    pointerEvents: "none"
+  });
+  document.body.appendChild(n);
+
+  if (typeof n.animate !== "function") { n.remove(); return; }
+  const anim = n.animate([
+    { transform: "translate(-50%,0) scale(.6)", opacity: 0 },
+    { transform: "translate(-50%,-14px) scale(1.15)", opacity: 1, offset: 0.25 },
+    { transform: "translate(-50%,-46px) scale(1)", opacity: 0 }
+  ], { duration: 1100, easing: "cubic-bezier(.22,.9,.3,1)" });
+
+  let done = false;
+  const clean = () => { if (!done) { done = true; n.remove(); } };
+  anim.onfinish = clean;
+  setTimeout(clean, 1400);
 }
 
 function renderHand(node, hand, done) {
@@ -371,7 +516,20 @@ const G = {
   deckFocus: "p"
 };
 
+/** What the hand actually adds up to — over the target once it has busted. */
 const total = side => G[side].hand.reduce((a, b) => a + b, 0);
+
+/**
+ * The number the rules care about. A bust always happens on the last card
+ * drawn, so the score it fell back from is simply the hand without that card.
+ * Everything downstream — the solver, the scoreboard, the damage — uses this.
+ */
+const scoreTotal = side => {
+  const h = G[side].hand;
+  return G[side].done === DONE_BUST
+    ? h.slice(0, -1).reduce((a, b) => a + b, 0)
+    : h.reduce((a, b) => a + b, 0);
+};
 
 /** Draw from a side's OWN deck, reshuffling that deck alone if it has run out. */
 function drawCard(side) {
@@ -493,16 +651,35 @@ function playerStand() {
   setTimeout(afterAction, 380);
 }
 
-function scheduleAi() { setTimeout(aiMove, 620); }
+function scheduleAi() {
+  setThinking(true, "Opponent is calculating");
+  setTimeout(aiMove, 620);
+}
 
 function aiMove() {
-  if (G.phase !== "playing" || G.turn !== 1 || G.a.done !== DONE_ACTIVE) return;
+  if (G.phase !== "playing" || G.turn !== 1 || G.a.done !== DONE_ACTIVE) {
+    setThinking(false);
+    return;
+  }
   G.busy = true;
-  const move = AI.decide(
-    countsOf(G.p.deck), G.p.deck.length,
-    countsOf(G.a.deck), G.a.deck.length,
-    total("p"), total("a"), G.p.done, G.a.done, G.temp, G.doubled);
+  // yield first: the solve blocks, and the indicator has to be on screen by then
+  afterPaint(() => {
+    const t0 = Date.now();
+    let move;
+    try {
+      move = AI.decide(
+        countsOf(G.p.deck), G.p.deck.length,
+        countsOf(G.a.deck), G.a.deck.length,
+        scoreTotal("p"), scoreTotal("a"), G.p.done, G.a.done, G.temp, G.doubled);
+    } finally {
+      noteSolve(Date.now() - t0);
+      setThinking(false);
+    }
+    applyAiMove(move);
+  });
+}
 
+function applyAiMove(move) {
   if (move === "stand") {
     G.a.done = DONE_STOOD;
     setStatus(`Opponent stands on ${total("a")}.`);
@@ -511,7 +688,10 @@ function aiMove() {
   } else {
     setStatus("Opponent hits.");
     dealTo("a", () => {
-      if (G.a.done === DONE_BUST) setStatus(`Opponent drew to ${total("a")} — <span class="hl">bust</span>.`, "win");
+      if (G.a.done === DONE_BUST) {
+        setStatus(`Opponent drew to ${total("a")} — <span class="hl">bust</span>, ` +
+                  `falling back to ${scoreOf(scoreTotal("a"), DONE_BUST)}.`, "win");
+      }
       afterAction();
     });
   }
@@ -522,34 +702,47 @@ function aiMove() {
 function resolveRound() {
   G.phase = "roundover";
   G.busy = true;
-  const pT = total("p"), aT = total("a");
-  const r = roundResult(pT, G.p.done, aT, G.a.done);
-  const dmg = r.dmg * (G.doubled ? 2 : 1);
+  const pS = scoreTotal("p"), aS = scoreTotal("a");
+  const o = roundOutcome(pS, G.p.done, aS, G.a.done);
+  const dmg = damageOf(o, G.doubled);
 
-  // "1" / "CRIT! 2" / "2 (doubled)" / "CRIT! 4 (doubled crit)"
+  // "3 attacks × 5" / "4 attacks −1 blocked (1 crit) × 5 ×2 doubled"
   const dmgText = () => {
-    if (r.dmg === 2 && G.doubled) return "CRIT ×2! 4 damage";
-    if (r.dmg === 2)              return "CRIT! 2 damage";
-    if (G.doubled)                return "2 damage (doubled)";
-    return "1 damage";
+    let s = `<b>${o.raw}</b> attack${o.raw === 1 ? "" : "s"}`;
+    if (o.blocked) s += ` <span class="block">−${o.blocked} blocked</span>`;
+    if (o.crits)   s += ` <span class="crit">${o.crits} crit</span>`;
+    s += ` × ${ATK}`;
+    if (G.doubled) s += " ×2 doubled";
+    return `${s} = <b>${dmg}</b> damage`;
+  };
+
+  /** "8 (bust from 10)" so the fallback score is never a mystery. */
+  const shownScore = side => {
+    const t = total(side);
+    return G[side].done === DONE_BUST
+      ? `${scoreOf(scoreTotal(side), DONE_BUST)} <span class="note">(bust from ${t})</span>`
+      : String(t);
   };
 
   let msg, cls;
-  if (!r.winner) {
+  if (!o.winner) {
     msg = (G.p.done === DONE_BUST && G.a.done === DONE_BUST)
       ? "You both bust — no damage."
-      : `Both on ${pT} — push, no damage.`;
+      : `Both on ${pS} — push, no damage.`;
     cls = "tie";
-  } else if (r.winner === "p") {
+  } else if (o.winner === "p") {
     G.a.hp = Math.max(0, G.a.hp - dmg);
-    msg = `${pT} beats ${aT}${G.a.done === DONE_BUST ? " (bust)" : ""} — ` +
-          `<span class="hl">${dmgText()}</span>`;
+    msg = `${shownScore("p")} vs ${shownScore("a")} — ${dmgText()}`;
     cls = "win";
   } else {
     G.p.hp = Math.max(0, G.p.hp - dmg);
-    msg = `${aT} beats ${pT}${G.p.done === DONE_BUST ? " (bust)" : ""} — ` +
-          `<span class="hl">${dmgText()}</span>`;
+    msg = `${shownScore("a")} vs ${shownScore("p")} — ${dmgText()}`;
     cls = "lose";
+  }
+  if (o.winner && dmg === 0) {
+    msg += o.blocked
+      ? ` <span class="note">· the guard held</span>`
+      : ` <span class="note">· too close to land a blow</span>`;
   }
 
   const shuffled = [G.p.reshuffled && "yours", G.a.reshuffled && "theirs"].filter(Boolean);
@@ -558,9 +751,11 @@ function resolveRound() {
   setStatus(msg, cls);
   render();
 
-  // the round landing gets a bigger swell than an ordinary draw; a crit bigger still
-  if (r.winner) {
-    pop(r.winner === "p" ? el.pScoreNum : el.aiScoreNum, dmg >= 4 ? 2.3 : dmg >= 2 ? 2 : 1.7, 560);
+  // the round landing gets a bigger swell than an ordinary draw
+  if (o.winner) {
+    const strength = 1.6 + Math.min(0.9, dmg / 60);      // scales with the blow
+    pop(o.winner === "p" ? el.pScoreNum : el.aiScoreNum, strength, 560);
+    if (dmg > 0) floatDamage(o.winner === "p" ? "a" : "p", dmg, o.crits > 0);
   } else {
     pop(el.pScoreNum, 1.25, 460);
     pop(el.aiScoreNum, 1.25, 460);
@@ -570,7 +765,7 @@ function resolveRound() {
     if (G.p.hp === 0 || G.a.hp === 0) return endMatch();
     G.busy = false;
     startRound();
-  }, 1700);
+  }, 1900);
 }
 
 function endMatch() {
@@ -624,8 +819,7 @@ function render() {
 const lastScore = { p: null, a: null };
 
 function renderScores() {
-  const pT = total("p"), aT = total("a");
-  const r = roundResult(pT, G.p.done, aT, G.a.done);
+  const r = roundOutcome(scoreTotal("p"), G.p.done, scoreTotal("a"), G.a.done);
 
   const stateOf = side => {
     if (!G[side].hand.length) return "";
@@ -634,8 +828,21 @@ function renderScores() {
     return r.winner === side ? "win" : "lose";
   };
 
-  paintScore("p", el.pScore,  el.pScoreNum,  pT, stateOf("p"));
-  paintScore("a", el.aiScore, el.aiScoreNum, aT, stateOf("a"));
+  paintScore("p", el.pScore,  el.pScoreNum,  total("p"), stateOf("p"));
+  paintScore("a", el.aiScore, el.aiScoreNum, total("a"), stateOf("a"));
+
+  // a side that stood is guarding: show what that guard is worth, live
+  paintGuard(el.pGuard, "p");
+  paintGuard(el.aiGuard, "a");
+}
+
+function paintGuard(node, side) {
+  const guarding = G[side].done === DONE_STOOD && G.phase !== "matchover";
+  const on = guarding && BLOCK_ON_STAND > 0;
+  if (on && !node._on) pop(node, 1.3, 340);
+  node._on = on;
+  node.className = "guard" + (on ? " on" : "");
+  node.textContent = `−${BLOCK_ON_STAND} blocked`;
 }
 
 function paintScore(key, box, num, value, state) {
@@ -654,20 +861,38 @@ function renderOdds() {
     el.odds.textContent = "";
     return;
   }
-  const av = AI.actionValues(
-    countsOf(G.p.deck), G.p.deck.length,
-    countsOf(G.a.deck), G.a.deck.length,
-    total("p"), total("a"), G.p.done, G.a.done, 0, G.doubled ? 1 : 0);
+  // Whenever the solver has recently been slow, defer so the hint can paint;
+  // while it's quick, compute inline and avoid a pointless flash.
+  const gen = ++oddsGen;
+  const compute = () => {
+    if (gen !== oddsGen) return;                  // a newer render superseded us
+    const t0 = Date.now();
+    const av = AI.actionValues(
+      countsOf(G.p.deck), G.p.deck.length,
+      countsOf(G.a.deck), G.a.deck.length,
+      scoreTotal("p"), scoreTotal("a"), G.p.done, G.a.done, 0, G.doubled ? 1 : 0);
+    noteSolve(Date.now() - t0);
+    if (gen !== oddsGen) return;
 
-  const options = [["hit", av.hit], ["stand", av.stand]];
-  if (av.double !== null) options.push(["double", av.double]);
-  const best = options.reduce((a, b) => (b[1] > a[1] ? b : a))[0];
+    const options = [["hit", av.hit], ["stand", av.stand]];
+    if (av.double !== null) options.push(["double", av.double]);
+    const best = options.reduce((a, b) => (b[1] > a[1] ? b : a))[0];
 
-  el.odds.innerHTML =
-    `Hitting busts <b>${Math.round(av.bust * 100)}%</b> of the time · ` +
-    options.map(([n, v]) => `${n} <b>${fmt(v)}</b>`).join(" vs ") +
-    ` · best: <b>${best}</b>`;
+    el.odds.innerHTML =
+      `Hitting busts <b>${Math.round(av.bust * 100)}%</b> of the time · ` +
+      options.map(([n, v]) => `${n} <b>${fmt(v)}</b>`).join(" vs ") +
+      ` · best: <b>${best}</b>`;
+  };
+
+  if (solverIsSlow()) {
+    el.odds.innerHTML = '<span class="calc">Reading the position…</span>';
+    afterPaint(compute);
+  } else {
+    compute();
+  }
 }
+
+let oddsGen = 0;
 
 const fmt = x => (x >= 0 ? "+" : "") + x.toFixed(2);
 
