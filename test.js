@@ -253,6 +253,17 @@ group("The opponent never makes a dominated blunder");
         }
   ok(blunders === 0, `never stands below the ceiling at any difficulty (${trials} trials)`);
 
+  // ...and the mirror case: on the target every card busts, so hitting is certain death
+  let suicides = 0, tries = 0;
+  for (const t of [0, 0.25, 0.5, 0.75, 1])
+    for (let p = 1; p <= TARGET; p++)
+      for (const pd of [ACTIVE, STOOD])
+        for (let k = 0; k < 6; k++) {
+          tries++;
+          if (AI.decide(full(), 24, full(), 24, p, TARGET, pd, ACTIVE, t, 0) === "hit") suicides++;
+        }
+  ok(suicides === 0, `never hits while sitting on ${TARGET} at any difficulty (${tries} trials)`);
+
   // the floor must not turn into "always hit" — it still stands when it should
   let stands = 0, n = 0;
   for (let a = SAFE_CEILING + 1; a <= 11; a++)

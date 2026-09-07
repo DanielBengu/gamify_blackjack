@@ -289,11 +289,11 @@ const AI = (() => {
      * over the true expected values, so its mistakes are close calls first.
      */
     decide(pC, pN, aC, aN, pT, aT, pD, aD, temp, dbl) {
-      // Below TARGET - MAX_VAL + 1 a draw cannot possibly bust you, so standing
-      // is strictly dominated by hitting — verified across every position. A
-      // blunder that obvious reads as a broken opponent rather than an easy one,
-      // so the dial never gets to make it, at any temperature.
-      if (aT <= SAFE_CEILING) return "hit";
+      // Two moves are dominated no matter what the rest of the board looks like,
+      // and the dial never gets to make either, at any temperature. A blunder
+      // this obvious reads as a broken opponent rather than an easy one.
+      if (aT <= SAFE_CEILING) return "hit";    // nothing in the deck can bust you
+      if (aT >= TARGET) return "stand";        // everything in the deck busts you
 
       const { stand, hit } = actionValues(pC, pN, aC, aN, pT, aT, pD, aD, 1, dbl ? 1 : 0);
       if (temp >= 1) return hit < stand ? "hit" : "stand";   // AI minimises
@@ -615,7 +615,15 @@ function playerHit() {
   G.busy = true;
   setStatus(G.p.deck.length ? "You hit." : "Your deck is empty — reshuffling.");
   dealTo("p", () => {
-    if (G.p.done === DONE_BUST) setStatus(`You drew to ${total("p")} — <span class="hl">bust</span>.`, "lose");
+    if (G.p.done === DONE_BUST) {
+      setStatus(`You drew to ${total("p")} — <span class="hl">bust</span>.`, "lose");
+    } else if (total("p") === TARGET) {
+      // Every card left would bust you, so there is no decision to offer.
+      // Stand automatically and collect the guard.
+      G.p.done = DONE_STOOD;
+      setStatus(`<span class="hl">${TARGET} exactly.</span> Standing automatically — nothing could improve it.`);
+      render();
+    }
     afterAction();
   });
 }

@@ -32,6 +32,9 @@ worse than 5. A near-miss bust therefore concedes very little, and can even conc
 from 11 (falling back to 9) against someone standing on 8 and they land no attacks at all,
 though they still take the round.
 
+**Reaching 12.** Land exactly on the target and you stand automatically. Every card left in the
+deck would bust you, so there is no decision to offer — and you still collect the guard.
+
 **Guarding.** Choosing to **stand** is a defensive act: a stander absorbs **1 attack** aimed at
 them. Busting out of the round earns no such protection. This is what stops the game collapsing
 into "always hit" — sitting on a modest total concedes the margin but blunts the punishment.
@@ -102,10 +105,17 @@ total at which standing beats hitting:
 The guard makes you settle a point earlier against the strong committed totals — 9, 11 and 12 —
 which are exactly the ones you cannot out-margin anyway, so blunting the blow beats chasing it.
 
-**A hard floor on blunders.** At 6 or below a draw cannot bust you, so standing there is strictly
-dominated — verified across every position in `test.js`. The opponent is never allowed to make that
-move, at any difficulty. A mistake that obvious reads as a broken opponent rather than an easy one,
-and the softmax was picking it about 10% of the time at Normal before the floor went in.
+**A hard floor on blunders.** Two moves are dominated whatever the rest of the board looks like,
+and the opponent is never allowed to make either, at any difficulty:
+
+- **Standing at 6 or below** — nothing in the deck can bust you there, so hitting is free.
+  The softmax was choosing it about 10% of the time at Normal before the floor went in.
+- **Hitting on 12** — everything in the deck busts you. It was throwing 20 health this way in
+  roughly 16% of such positions.
+
+Both are verified across every position and every dial setting in `test.js`. A mistake that obvious
+reads as a broken opponent rather than an easy one, which is the whole reason the floor exists;
+the player gets the same protection from the automatic stand on 12.
 
 **What it costs.** Two deck compositions plus the double branch make this the expensive part: the
 worst case — start of a round, both decks full — takes about 120 ms cold, and typical mid-round
